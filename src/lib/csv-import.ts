@@ -212,16 +212,22 @@ function parseGeneric(lines: string[]): ParsedTransaction[] {
   }).filter(t => t.date && t.amount !== 0);
 }
 
-export function importTransactions(parsed: ParsedTransaction[]): number {
+export function importTransactions(parsed: ParsedTransaction[]): { imported: number; skipped: number } {
   const insert = db.prepare(`
     INSERT OR IGNORE INTO transactions (id, date, description, amount, counterparty, reference, account_number, source, quarter, year)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'csv_import', ?, ?)
   `);
+  const checkDuplicate = db.prepare(
+    'SELECT id FROM transactions WHERE date = ? AND amount = ? AND counterparty = ?'
+  );
 
   let imported = 0;
+  let skipped = 0;
   const insertMany = db.transaction((txns: ParsedTransaction[]) => {
     for (const tx of txns) {
       if (!tx.date) continue;
+      const existing = checkDuplicate.get(tx.date, tx.amount, tx.counterparty);
+      if (existing) { skipped++; continue; }
       const { quarter, year } = getQuarterFromDate(tx.date);
       const id = uuidv4();
       insert.run(id, tx.date, tx.description, tx.amount, tx.counterparty, tx.reference, tx.accountNumber, quarter, year);
@@ -230,5 +236,5 @@ export function importTransactions(parsed: ParsedTransaction[]): number {
   });
 
   insertMany(parsed);
-  return imported;
+  return { imported, skipped };
 }

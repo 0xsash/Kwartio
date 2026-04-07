@@ -15,6 +15,10 @@ export async function GET(request: NextRequest) {
     params.push(classification);
   }
 
+  if (searchParams.get('unmatched') === 'true') {
+    query += ' AND id NOT IN (SELECT matched_invoice_id FROM transactions WHERE matched_invoice_id IS NOT NULL)';
+  }
+
   query += ' ORDER BY invoice_date DESC';
 
   const invoices = db.prepare(query).all(...params) as Invoice[];

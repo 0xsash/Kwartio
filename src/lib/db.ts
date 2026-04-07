@@ -63,12 +63,34 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_invoices_quarter ON invoices(year, quarter);
   CREATE INDEX IF NOT EXISTS idx_transactions_quarter ON transactions(year, quarter);
   CREATE INDEX IF NOT EXISTS idx_transactions_matched ON transactions(matched_invoice_id);
 `);
 
 export default db;
+
+export function getSetting(key: string): string | null {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(key, value);
+}
+
+export function getAllSettings(): Record<string, string> {
+  const rows = db.prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
+  const result: Record<string, string> = {};
+  for (const row of rows) result[row.key] = row.value;
+  return result;
+}
 
 export function getQuarterFromDate(dateStr: string): { quarter: string; year: number } {
   const date = new Date(dateStr);
