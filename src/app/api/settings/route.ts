@@ -12,6 +12,9 @@ export async function PUT(request: NextRequest) {
   const allowedKeys = [
     'business_name', 'vat_number', 'address_line1', 'address_line2',
     'city', 'postal_code', 'country', 'phone', 'email',
+    'google_client_id', 'google_client_secret',
+    'nordigen_secret_id', 'nordigen_secret_key',
+    'app_url',
   ];
 
   for (const [key, value] of Object.entries(body)) {
