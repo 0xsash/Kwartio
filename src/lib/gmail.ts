@@ -77,9 +77,14 @@ export async function scanInboxForInvoices(): Promise<{
   let imported = 0;
 
   const queries = [
-    'has:attachment (subject:factuur OR subject:invoice OR subject:receipt OR subject:bon OR subject:bestelling OR subject:order OR subject:payment OR subject:betaling)',
-    'has:attachment from:(noreply OR no-reply OR billing OR invoice OR factuur OR finance OR accounting)',
-    'has:attachment filename:pdf (factuur OR invoice OR receipt)',
+    // Subject-based: Dutch, French, English invoice/payment terms
+    'has:attachment (subject:factuur OR subject:invoice OR subject:facture OR subject:receipt OR subject:bon OR subject:bestelling OR subject:order OR subject:payment OR subject:betaling OR subject:paiement OR subject:creditnota OR subject:credit note OR subject:nota OR subject:afrekening OR subject:rekening)',
+    // Sender-based: common billing sender patterns
+    'has:attachment from:(noreply OR no-reply OR billing OR invoice OR factuur OR facture OR finance OR accounting OR boekhouding OR comptabilite OR admin OR info OR support)',
+    // PDF attachments with invoice-like filenames
+    'has:attachment (filename:pdf OR filename:PDF) (factuur OR invoice OR facture OR receipt OR bon OR nota OR credit)',
+    // Broad: any PDF attachment from last period (catches utility bills, subscriptions, etc.)
+    'has:attachment filename:pdf',
   ];
 
   const processedMessageIds = new Set<string>();
@@ -101,8 +106,8 @@ export async function scanInboxForInvoices(): Promise<{
     try {
       const res = await gmail.users.messages.list({
         userId: 'me',
-        q: `${query} newer_than:90d`,
-        maxResults: 50,
+        q: `${query} newer_than:1y`,
+        maxResults: 100,
       });
 
       const messages = res.data.messages || [];
@@ -120,7 +125,13 @@ export async function scanInboxForInvoices(): Promise<{
         }
       }
     } catch (e) {
-      errors.push(`Query failed: ${(e as Error).message}`);
+      const errMsg = (e as Error).message || String(e);
+      // Surface auth errors clearly
+      if (errMsg.includes('401') || errMsg.includes('invalid_grant') || errMsg.includes('Token')) {
+        errors.push(`Gmail authenticatie verlopen. Koppel Gmail opnieuw via Instellingen.`);
+        break;
+      }
+      errors.push(`Query failed: ${errMsg}`);
     }
   }
 

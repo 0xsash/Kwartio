@@ -47,17 +47,29 @@ function TransactionsContent() {
 
   useEffect(() => { loadTransactions(); }, [loadTransactions]);
 
-  const handleImport = async (file: File) => {
+  const handleImport = async (files: FileList) => {
     setImporting(true); setImportResult(null);
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      const res = await fetch("/api/transactions/import", { method: "POST", body: formData });
-      const data = await res.json();
-      setImportResult(res.ok ? data.message : `Fout: ${data.error}`);
-      if (res.ok) loadTransactions();
-    } catch (e) { setImportResult(`Fout: ${(e as Error).message}`); }
-    finally { setImporting(false); }
+    const results: string[] = [];
+    let anySuccess = false;
+
+    for (const file of Array.from(files)) {
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const res = await fetch("/api/transactions/import", { method: "POST", body: formData });
+        const data = await res.json();
+        if (res.ok) {
+          results.push(`${file.name}: ${data.message}`);
+          anySuccess = true;
+        } else {
+          results.push(`${file.name}: Fout - ${data.error}`);
+        }
+      } catch (e) { results.push(`${file.name}: Fout - ${(e as Error).message}`); }
+    }
+
+    setImportResult(results.join('\n'));
+    if (anySuccess) loadTransactions();
+    setImporting(false);
   };
 
   const runMatching = async () => {
@@ -94,27 +106,29 @@ function TransactionsContent() {
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
         <div className="flex items-center gap-2 mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Bankafschrift importeren</h2>
-          <InfoBubble text="Upload een CSV- of PDF-bestand van je bank. Kwartio herkent automatisch het formaat — werkt met elke Belgische bank (KBC, Belfius, ING, BNP, ...) en ook buitenlandse banken." />
+          <InfoBubble text="Upload een CSV- of PDF-bestand van je bank. Kwartio herkent automatisch het formaat — werkt met elke Belgische bank (KBC, Belfius, ING, BNP, ...) en ook buitenlandse banken. Je kan meerdere bestanden tegelijk selecteren." />
         </div>
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Bestand kiezen</label>
             <label className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg cursor-pointer hover:bg-green-700 transition-colors text-sm font-medium">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-              <input type="file" accept=".csv,.txt,.pdf" className="hidden" onChange={(e) => e.target.files?.[0] && handleImport(e.target.files[0])} disabled={importing} />
+              <input type="file" accept=".csv,.txt,.pdf" multiple className="hidden" onChange={(e) => e.target.files?.length && handleImport(e.target.files)} disabled={importing} />
               {importing ? "Analyseren..." : "CSV of PDF uploaden"}
             </label>
-            <p className="text-xs text-gray-400 mt-1">CSV, TXT of PDF bankafschrift</p>
+            <p className="text-xs text-gray-400 mt-1">CSV, TXT of PDF — je kan meerdere bestanden tegelijk selecteren</p>
           </div>
           <div>
             <button onClick={runMatching} disabled={matching || transactions.length === 0} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-medium inline-flex items-center gap-2">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
               {matching ? "Matchen..." : "Auto-match met facturen"}
             </button>
-            <InfoBubble text="Koppelt transacties automatisch aan facturen op basis van bedrag, datum en naam. Hoe meer facturen je hebt geüpload, hoe beter de matching werkt." />
+            <InfoBubble text="Koppelt transacties automatisch aan facturen op basis van bedrag, datum en naam. Hoe meer facturen je hebt ge\u00FCpload, hoe beter de matching werkt." />
           </div>
         </div>
-        {importResult && <p className={`mt-3 text-sm ${importResult.startsWith("Fout") ? "text-red-600" : "text-green-600"}`}>{importResult}</p>}
+        {importResult && <div className="mt-3 text-sm space-y-1">{importResult.split('\n').map((line, i) => (
+          <p key={i} className={line.includes("Fout") ? "text-red-600" : "text-green-600"}>{line}</p>
+        ))}</div>}
         {matchResult && <p className={`mt-2 text-sm ${matchResult.startsWith("Fout") ? "text-red-600" : "text-blue-600"}`}>{matchResult}</p>}
       </div>
 

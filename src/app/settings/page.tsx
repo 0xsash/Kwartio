@@ -82,7 +82,7 @@ function SettingsContent() {
       const res = await fetch("/api/gmail/scan", { method: "POST" });
       const data = await res.json();
       if (res.ok) {
-        setScanResult(`${data.found} emails gevonden, ${data.imported} facturen ge\u00EFmporteerd${data.errors?.length ? ` (${data.errors.length} fouten)` : ""}`);
+        setScanResult(`${data.found} emails gevonden, ${data.imported} facturen ge\u00EFmporteerd${data.errors?.length ? ` — ${data.errors[0]}` : ""}`);
       } else {
         setScanResult(`Fout: ${data.error}`);
       }
