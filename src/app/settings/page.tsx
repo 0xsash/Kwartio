@@ -75,16 +75,48 @@ function SettingsContent() {
     window.location.href = "/api/auth/gmail";
   };
 
+  const extractPending = async () => {
+    // Keep extracting batches until none remain
+    let totalExtracted = 0;
+    let totalFailed = 0;
+    let remaining = 1; // start loop
+    while (remaining > 0) {
+      const res = await fetch("/api/invoices/extract", { method: "POST" });
+      if (!res.ok) break;
+      const data = await res.json();
+      totalExtracted += data.extracted;
+      totalFailed += data.failed;
+      remaining = data.remaining;
+      setScanResult(`${totalExtracted} facturen verwerkt${totalFailed ? `, ${totalFailed} mislukt` : ""}${remaining > 0 ? `, ${remaining} resterend...` : " — klaar!"}`);
+    }
+    return { extracted: totalExtracted, failed: totalFailed };
+  };
+
   const scanInbox = async () => {
     setScanning(true);
     setScanResult(null);
     try {
+      // Phase 1: Quick scan — collect emails and save attachments
+      setScanResult("Inbox doorzoeken...");
       const res = await fetch("/api/gmail/scan", { method: "POST" });
       const data = await res.json();
-      if (res.ok) {
-        setScanResult(`${data.found} emails gevonden, ${data.imported} facturen ge\u00EFmporteerd${data.errors?.length ? ` — ${data.errors[0]}` : ""}`);
-      } else {
+      if (!res.ok) {
         setScanResult(`Fout: ${data.error}`);
+        return;
+      }
+
+      if (data.errors?.length) {
+        setScanResult(`${data.found} emails gevonden, ${data.imported} bijlagen opgeslagen — ${data.errors[0]}`);
+        if (data.imported === 0) return;
+      } else {
+        setScanResult(`${data.found} emails gevonden, ${data.imported} bijlagen opgeslagen. Data extractie bezig...`);
+      }
+
+      // Phase 2: Extract data from saved invoices
+      if (data.imported > 0) {
+        await extractPending();
+      } else {
+        setScanResult(`${data.found} emails gevonden, geen nieuwe facturen${data.errors?.length ? ` — ${data.errors[0]}` : ""}`);
       }
     } catch (e) { setScanResult(`Fout: ${(e as Error).message}`); }
     finally { setScanning(false); }

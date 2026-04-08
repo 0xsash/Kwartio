@@ -63,6 +63,23 @@ async function getAuthenticatedClient() {
   return client;
 }
 
+// Process a batch of items with limited concurrency
+async function processBatch<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.allSettled(batch.map(fn));
+    for (const r of batchResults) {
+      if (r.status === 'fulfilled') results.push(r.value);
+    }
+  }
+  return results;
+}
+
 export async function scanInboxForInvoices(): Promise<{
   found: number;
   imported: number;
@@ -73,23 +90,15 @@ export async function scanInboxForInvoices(): Promise<{
 
   const gmail = google.gmail({ version: 'v1', auth: client });
   const errors: string[] = [];
-  let found = 0;
-  let imported = 0;
 
   const queries = [
-    // Subject-based: Dutch, French, English invoice/payment terms
     'has:attachment (subject:factuur OR subject:invoice OR subject:facture OR subject:receipt OR subject:bon OR subject:bestelling OR subject:order OR subject:payment OR subject:betaling OR subject:paiement OR subject:creditnota OR subject:credit note OR subject:nota OR subject:afrekening OR subject:rekening)',
-    // Sender-based: common billing sender patterns
     'has:attachment from:(noreply OR no-reply OR billing OR invoice OR factuur OR facture OR finance OR accounting OR boekhouding OR comptabilite OR admin OR info OR support)',
-    // PDF attachments with invoice-like filenames
     'has:attachment (filename:pdf OR filename:PDF) (factuur OR invoice OR facture OR receipt OR bon OR nota OR credit)',
-    // Broad: any PDF attachment from last period (catches utility bills, subscriptions, etc.)
-    'has:attachment filename:pdf',
   ];
 
-  const processedMessageIds = new Set<string>();
-
   // Get already-imported message IDs
+  const processedMessageIds = new Set<string>();
   const { data: existing } = await supabase
     .from('invoices')
     .select('extracted_data')
@@ -102,37 +111,57 @@ export async function scanInboxForInvoices(): Promise<{
     } catch { /* skip */ }
   }
 
-  for (const query of queries) {
-    try {
+  // Phase 1: Run all queries in parallel to collect unique message IDs
+  const uniqueMessageIds = new Set<string>();
+  const queryResults = await Promise.allSettled(
+    queries.map(async (query) => {
       const res = await gmail.users.messages.list({
         userId: 'me',
         q: `${query} newer_than:1y`,
-        maxResults: 100,
+        maxResults: 50,
       });
+      return res.data.messages || [];
+    }),
+  );
 
-      const messages = res.data.messages || [];
-      found += messages.length;
-
-      for (const msg of messages) {
-        if (!msg.id || processedMessageIds.has(msg.id)) continue;
-        processedMessageIds.add(msg.id);
-
-        try {
-          const result = await processGmailMessage(gmail, msg.id);
-          if (result) imported += result;
-        } catch (e) {
-          errors.push(`Message ${msg.id}: ${(e as Error).message}`);
+  for (const result of queryResults) {
+    if (result.status === 'fulfilled') {
+      for (const msg of result.value) {
+        if (msg.id && !processedMessageIds.has(msg.id)) {
+          uniqueMessageIds.add(msg.id);
         }
       }
-    } catch (e) {
-      const errMsg = (e as Error).message || String(e);
-      // Surface auth errors clearly
+    } else {
+      const errMsg = result.reason?.message || String(result.reason);
       if (errMsg.includes('401') || errMsg.includes('invalid_grant') || errMsg.includes('Token')) {
-        errors.push(`Gmail authenticatie verlopen. Koppel Gmail opnieuw via Instellingen.`);
-        break;
+        return { found: 0, imported: 0, errors: ['Gmail authenticatie verlopen. Koppel Gmail opnieuw via Instellingen.'] };
       }
       errors.push(`Query failed: ${errMsg}`);
     }
+  }
+
+  const found = uniqueMessageIds.size;
+  if (found === 0) {
+    await setSetting('gmail_last_scan', new Date().toISOString());
+    return { found: 0, imported: 0, errors };
+  }
+
+  // Phase 2: Fetch messages and save attachments in parallel batches (no Claude extraction yet)
+  const messageIds = Array.from(uniqueMessageIds);
+  let imported = 0;
+
+  const importResults = await processBatch(messageIds, 5, async (msgId) => {
+    try {
+      const count = await saveGmailAttachments(gmail, msgId);
+      return count;
+    } catch (e) {
+      errors.push(`Message ${msgId}: ${(e as Error).message}`);
+      return 0;
+    }
+  });
+
+  for (const count of importResults) {
+    imported += count;
   }
 
   await setSetting('gmail_last_scan', new Date().toISOString());
@@ -140,17 +169,22 @@ export async function scanInboxForInvoices(): Promise<{
   return { found, imported, errors };
 }
 
-async function processGmailMessage(
+// Save attachments from a Gmail message WITHOUT running Claude extraction
+// Extraction happens separately via extractPendingInvoices()
+async function saveGmailAttachments(
   gmail: ReturnType<typeof google.gmail>,
-  messageId: string
+  messageId: string,
 ): Promise<number> {
   const msg = await gmail.users.messages.get({
     userId: 'me',
     id: messageId,
+    format: 'metadata',
+    metadataHeaders: ['Subject', 'From'],
   });
 
-  const parts = msg.data.payload?.parts || [];
-  let importedCount = 0;
+  // Check all parts (including nested) for attachments
+  const parts = collectParts(msg.data.payload);
+  let savedCount = 0;
 
   for (const part of parts) {
     const mimeType = part.mimeType || '';
@@ -186,20 +220,76 @@ async function processGmailMessage(
       .from('invoices')
       .upload(storedName, fileBuffer, { contentType: mimeType || 'application/octet-stream' });
 
-    // Insert into DB
+    // Insert into DB with pending extraction status and gmail_message_id
     await supabase.from('invoices').insert({
       id,
       file_path: storedName,
       original_filename: filename,
       extraction_status: 'pending',
+      extracted_data: JSON.stringify({ gmail_message_id: messageId }),
     });
 
-    // Extract with Claude Vision
-    try {
-      await supabase.from('invoices').update({ extraction_status: 'processing' }).eq('id', id);
-      const data = await extractInvoiceData(fileBuffer, filename);
+    savedCount++;
+  }
 
-      (data as Record<string, unknown>).gmail_message_id = messageId;
+  return savedCount;
+}
+
+// Recursively collect all parts from a Gmail message payload
+function collectParts(payload: { parts?: unknown[]; mimeType?: string; filename?: string; body?: { attachmentId?: string } } | undefined | null): Array<{ mimeType?: string; filename?: string; body?: { attachmentId?: string } }> {
+  if (!payload) return [];
+  const result: Array<{ mimeType?: string; filename?: string; body?: { attachmentId?: string } }> = [];
+  if (payload.filename) result.push(payload);
+  if (payload.parts) {
+    for (const part of payload.parts as Array<typeof payload>) {
+      result.push(...collectParts(part));
+    }
+  }
+  return result;
+}
+
+// Extract data from pending invoices (called separately)
+export async function extractPendingInvoices(): Promise<{
+  extracted: number;
+  failed: number;
+  remaining: number;
+}> {
+  const { data: pending } = await supabase
+    .from('invoices')
+    .select('id, file_path, original_filename, extracted_data')
+    .eq('extraction_status', 'pending')
+    .limit(10); // Process 10 at a time to stay within serverless timeout
+
+  if (!pending || pending.length === 0) {
+    return { extracted: 0, failed: 0, remaining: 0 };
+  }
+
+  let extracted = 0;
+  let failed = 0;
+
+  // Process extractions 3 at a time
+  await processBatch(pending, 3, async (invoice) => {
+    try {
+      await supabase.from('invoices').update({ extraction_status: 'processing' }).eq('id', invoice.id);
+
+      // Download file from Supabase Storage
+      const { data: fileData } = await supabase.storage
+        .from('invoices')
+        .download(invoice.file_path);
+
+      if (!fileData) {
+        await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', invoice.id);
+        failed++;
+        return;
+      }
+
+      const fileBuffer = Buffer.from(await fileData.arrayBuffer());
+      const data = await extractInvoiceData(fileBuffer, invoice.original_filename || invoice.file_path);
+
+      // Preserve existing extracted_data fields (like gmail_message_id)
+      let existingData: Record<string, unknown> = {};
+      try { existingData = JSON.parse(invoice.extracted_data || '{}'); } catch { /* skip */ }
+      const mergedData = { ...existingData, ...data };
 
       const dateStr = (data.invoice_date as string) || '';
       const qInfo = dateStr
@@ -216,20 +306,27 @@ async function processGmailMessage(
         description: data.description as string || null,
         category: data.category as string || null,
         currency: data.currency as string || 'EUR',
-        extracted_data: JSON.stringify(data),
+        extracted_data: JSON.stringify(mergedData),
         extraction_status: 'done',
         quarter: qInfo.quarter,
         year: qInfo.year,
         updated_at: new Date().toISOString(),
-      }).eq('id', id);
+      }).eq('id', invoice.id);
 
-      importedCount++;
+      extracted++;
     } catch {
-      await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', id);
+      await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', invoice.id);
+      failed++;
     }
-  }
+  });
 
-  return importedCount;
+  // Check how many remain
+  const { count } = await supabase
+    .from('invoices')
+    .select('id', { count: 'exact', head: true })
+    .eq('extraction_status', 'pending');
+
+  return { extracted, failed, remaining: count || 0 };
 }
 
 export async function isGmailConnected(): Promise<boolean> {
