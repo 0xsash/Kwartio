@@ -35,6 +35,7 @@ function detectBankFormat(lines: string[]): string {
   const header = lines[0].toLowerCase();
 
   if (header.includes('rekeningnummer') && header.includes('rubriek')) return 'kbc';
+  if (header.includes('kredietkaart') && header.includes('handelaar')) return 'kbc';
   if (header.includes('rekening') && header.includes('boekingsdatum') && header.includes('valutadatum')) return 'belfius';
   if (header.includes('rekening') && header.includes('muntsoort') && header.includes('afschriftnummer')) return 'ing';
   if (header.includes('numéro de séquence') || header.includes('volgnummer')) return 'bnp';
@@ -97,12 +98,42 @@ function parseDate(str: string): string {
 
 function parseKBC(lines: string[]): ParsedTransaction[] {
   const header = splitCSVLine(lines[0]);
-  const dateIdx = header.findIndex(h => h.toLowerCase() === 'datum');
-  const descIdx = header.findIndex(h => h.toLowerCase() === 'omschrijving');
-  const amountIdx = header.findIndex(h => h.toLowerCase() === 'bedrag');
-  const nameIdx = header.findIndex(h => h.toLowerCase() === 'naam');
-  const detailIdx = header.findIndex(h => h.toLowerCase() === 'detail');
-  const accountIdx = header.findIndex(h => h.toLowerCase() === 'rekeningnummer');
+  const headerLower = header.map(h => h.toLowerCase().trim());
+
+  // Detect credit card vs bank account format
+  const isCreditCard = headerLower.some(h => h.includes('kredietkaart'));
+
+  if (isCreditCard) {
+    const dateIdx = headerLower.findIndex(h => h.includes('datum verrichting'));
+    const amountEurIdx = headerLower.findIndex(h => h === 'bedrag in eur');
+    const amountIdx = amountEurIdx >= 0 ? amountEurIdx : headerLower.findIndex(h => h === 'bedrag');
+    const nameIdx = headerLower.findIndex(h => h.includes('handelaar'));
+    const descIdx = headerLower.findIndex(h => h.includes('toelichting'));
+    const locationIdx = headerLower.findIndex(h => h === 'locatie');
+    const accountIdx = headerLower.findIndex(h => h.includes('kredietkaart'));
+
+    return lines.slice(1).map(line => {
+      const cols = splitCSVLine(line);
+      if (cols.length < 5) return null;
+      const description = cols[descIdx] || cols[locationIdx] || '';
+      return {
+        date: parseDate(cols[dateIdx] || ''),
+        description: description.trim(),
+        amount: parseAmount(cols[amountIdx] || ''),
+        counterparty: (cols[nameIdx] || '').trim(),
+        reference: '',
+        accountNumber: (cols[accountIdx] || '').trim(),
+      };
+    }).filter((t): t is ParsedTransaction => t !== null && !!t.date && t.amount !== 0);
+  }
+
+  // Regular KBC bank account format
+  const dateIdx = headerLower.findIndex(h => h === 'datum');
+  const descIdx = headerLower.findIndex(h => h === 'omschrijving');
+  const amountIdx = headerLower.findIndex(h => h === 'bedrag');
+  const nameIdx = headerLower.findIndex(h => h === 'naam');
+  const detailIdx = headerLower.findIndex(h => h === 'detail');
+  const accountIdx = headerLower.findIndex(h => h === 'rekeningnummer');
 
   return lines.slice(1).map(line => {
     const cols = splitCSVLine(line);
