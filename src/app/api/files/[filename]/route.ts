@@ -25,7 +25,7 @@ export async function GET(
   };
 
   const buffer = Buffer.from(await data.arrayBuffer());
-  return new NextResponse(buffer, {
+  return new NextResponse(new Uint8Array(buffer), {
     headers: {
       'Content-Type': contentTypes[ext] || 'application/octet-stream',
     },
