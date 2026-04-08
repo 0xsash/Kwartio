@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAllSettings, setSetting } from '@/lib/db';
 
 export async function GET() {
-  const settings = getAllSettings();
+  const settings = await getAllSettings();
   return NextResponse.json(settings);
 }
 
@@ -19,7 +19,7 @@ export async function PUT(request: NextRequest) {
 
   for (const [key, value] of Object.entries(body)) {
     if (allowedKeys.includes(key) && typeof value === 'string') {
-      setSetting(key, value);
+      await setSetting(key, value);
     }
   }
 

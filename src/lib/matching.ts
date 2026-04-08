@@ -1,41 +1,46 @@
-import db, { type Invoice, type Transaction } from './db';
+import { supabase, type Invoice, type Transaction } from './db';
 
-// Match transactions to invoices based on amount, date proximity, and vendor similarity
-export function autoMatchTransactions(year: number, quarter: string) {
-  const invoices = db.prepare(
-    'SELECT * FROM invoices WHERE year = ? AND quarter = ? AND extraction_status = ?'
-  ).all(year, quarter, 'done') as Invoice[];
+export async function autoMatchTransactions(year: number, quarter: string) {
+  const { data: invoices } = await supabase
+    .from('invoices')
+    .select('*')
+    .eq('year', year)
+    .eq('quarter', quarter)
+    .eq('extraction_status', 'done')
+    .returns<Invoice[]>();
 
-  const transactions = db.prepare(
-    'SELECT * FROM transactions WHERE year = ? AND quarter = ? AND matched_invoice_id IS NULL'
-  ).all(year, quarter) as Transaction[];
+  const { data: transactions } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('year', year)
+    .eq('quarter', quarter)
+    .is('matched_invoice_id', null)
+    .returns<Transaction[]>();
 
   const matches: { transactionId: string; invoiceId: string; confidence: number }[] = [];
 
-  for (const tx of transactions) {
+  for (const tx of transactions || []) {
     let bestMatch: { invoiceId: string; score: number } | null = null;
 
-    for (const inv of invoices) {
+    for (const inv of invoices || []) {
       if (!inv.amount) continue;
 
       let score = 0;
 
-      // Amount matching (most important) - check if absolute values are close
       const txAmount = Math.abs(tx.amount);
       const invAmount = Math.abs(inv.amount);
       const amountDiff = Math.abs(txAmount - invAmount);
 
       if (amountDiff < 0.01) {
-        score += 50; // Exact match
+        score += 50;
       } else if (amountDiff < 1) {
-        score += 30; // Very close (rounding)
+        score += 30;
       } else if (amountDiff / invAmount < 0.05) {
-        score += 15; // Within 5%
+        score += 15;
       } else {
-        continue; // Amount too different, skip
+        continue;
       }
 
-      // Date proximity
       if (inv.invoice_date && tx.date) {
         const invDate = new Date(inv.invoice_date);
         const txDate = new Date(tx.date);
@@ -47,7 +52,6 @@ export function autoMatchTransactions(year: number, quarter: string) {
         else if (daysDiff <= 30) score += 5;
       }
 
-      // Vendor / counterparty similarity
       if (inv.vendor && tx.counterparty) {
         const vendorLower = inv.vendor.toLowerCase();
         const counterpartyLower = tx.counterparty.toLowerCase();
@@ -55,7 +59,6 @@ export function autoMatchTransactions(year: number, quarter: string) {
         if (counterpartyLower.includes(vendorLower) || vendorLower.includes(counterpartyLower)) {
           score += 25;
         } else {
-          // Check for partial word match
           const vendorWords = vendorLower.split(/\s+/);
           const counterpartyWords = counterpartyLower.split(/\s+/);
           const commonWords = vendorWords.filter(w => w.length > 2 && counterpartyWords.some(cw => cw.includes(w)));
@@ -65,7 +68,6 @@ export function autoMatchTransactions(year: number, quarter: string) {
         }
       }
 
-      // Description match
       if (inv.vendor && tx.description) {
         const descLower = tx.description.toLowerCase();
         const vendorLower = inv.vendor.toLowerCase();
@@ -88,62 +90,58 @@ export function autoMatchTransactions(year: number, quarter: string) {
     }
   }
 
-  // Apply matches (highest confidence first, no duplicate invoice matches)
   const usedInvoices = new Set<string>();
   const sortedMatches = matches.sort((a, b) => b.confidence - a.confidence);
   const appliedMatches: typeof matches = [];
 
-  const updateStmt = db.prepare(
-    'UPDATE transactions SET matched_invoice_id = ? WHERE id = ?'
-  );
-
   for (const match of sortedMatches) {
     if (usedInvoices.has(match.invoiceId)) continue;
     usedInvoices.add(match.invoiceId);
-    updateStmt.run(match.invoiceId, match.transactionId);
+
+    await supabase
+      .from('transactions')
+      .update({ matched_invoice_id: match.invoiceId })
+      .eq('id', match.transactionId);
+
     appliedMatches.push(match);
   }
 
   return appliedMatches;
 }
 
-// Apply learned classification rules
-export function applyClassificationRules() {
-  const rules = db.prepare('SELECT * FROM classification_rules').all() as Array<{
-    pattern: string;
-    field: string;
-    classification: string;
-    category: string | null;
-  }>;
+export async function applyClassificationRules() {
+  const { data: rules } = await supabase
+    .from('classification_rules')
+    .select('*');
 
-  const updateInvoice = db.prepare(
-    'UPDATE invoices SET classification = ?, category = COALESCE(?, category) WHERE id = ?'
-  );
-  const updateTransaction = db.prepare(
-    'UPDATE transactions SET classification = ?, category = COALESCE(?, category) WHERE id = ?'
-  );
+  if (!rules || rules.length === 0) return;
 
-  // Apply to unclassified invoices
-  const invoices = db.prepare(
-    "SELECT * FROM invoices WHERE classification = 'unknown'"
-  ).all() as Invoice[];
+  const { data: invoices } = await supabase
+    .from('invoices')
+    .select('*')
+    .eq('classification', 'unknown')
+    .returns<Invoice[]>();
 
-  for (const inv of invoices) {
+  for (const inv of invoices || []) {
     for (const rule of rules) {
       const value = rule.field === 'vendor' ? inv.vendor : inv.description;
       if (value && value.toLowerCase().includes(rule.pattern.toLowerCase())) {
-        updateInvoice.run(rule.classification, rule.category, inv.id);
+        await supabase
+          .from('invoices')
+          .update({ classification: rule.classification, category: rule.category || inv.category })
+          .eq('id', inv.id);
         break;
       }
     }
   }
 
-  // Apply to unclassified transactions
-  const transactions = db.prepare(
-    "SELECT * FROM transactions WHERE classification = 'unknown'"
-  ).all() as Transaction[];
+  const { data: transactions } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('classification', 'unknown')
+    .returns<Transaction[]>();
 
-  for (const tx of transactions) {
+  for (const tx of transactions || []) {
     for (const rule of rules) {
       let value: string | null = null;
       if (rule.field === 'counterparty') value = tx.counterparty;
@@ -151,7 +149,10 @@ export function applyClassificationRules() {
       else if (rule.field === 'vendor') value = tx.counterparty;
 
       if (value && value.toLowerCase().includes(rule.pattern.toLowerCase())) {
-        updateTransaction.run(rule.classification, rule.category, tx.id);
+        await supabase
+          .from('transactions')
+          .update({ classification: rule.classification, category: rule.category || tx.category })
+          .eq('id', tx.id);
         break;
       }
     }

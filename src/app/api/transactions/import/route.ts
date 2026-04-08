@@ -18,10 +18,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'No transactions found in file. Check the format.' }, { status: 400 });
   }
 
-  const { imported, skipped } = importTransactions(parsed);
+  const { imported, skipped } = await importTransactions(parsed);
 
   // Apply any existing classification rules
-  applyClassificationRules();
+  await applyClassificationRules();
 
   const parts = [`${imported} transacties ge\u00EFmporteerd`];
   if (skipped > 0) parts.push(`${skipped} duplicaten overgeslagen`);

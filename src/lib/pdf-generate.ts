@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import db, { type Transaction } from './db';
+import { supabase, type Transaction } from './db';
 
 type Settings = Record<string, string>;
 
@@ -8,11 +8,16 @@ export async function generateBankStatementPDF(
   quarter: string,
   settings: Settings
 ): Promise<Buffer> {
-  const transactions = db
-    .prepare(
-      "SELECT * FROM transactions WHERE year = ? AND quarter = ? AND classification = 'professional' ORDER BY date ASC"
-    )
-    .all(year, quarter) as Transaction[];
+  const { data } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('year', year)
+    .eq('quarter', quarter)
+    .eq('classification', 'professional')
+    .order('date', { ascending: true })
+    .returns<Transaction[]>();
+
+  const transactions = data || [];
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 50 });

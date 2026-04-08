@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import db, { type Transaction } from '@/lib/db';
+import { supabase } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -8,21 +8,32 @@ export async function GET(request: NextRequest) {
   const classification = searchParams.get('classification');
   const unmatched = searchParams.get('unmatched');
 
-  let query = 'SELECT t.*, i.vendor as matched_vendor, i.original_filename as matched_invoice_file FROM transactions t LEFT JOIN invoices i ON t.matched_invoice_id = i.id WHERE t.year = ? AND t.quarter = ?';
-  const params: unknown[] = [year, quarter];
+  let query = supabase
+    .from('transactions')
+    .select('*, invoices!transactions_matched_invoice_id_fkey(vendor, original_filename)')
+    .eq('year', year)
+    .eq('quarter', quarter);
 
   if (classification) {
-    query += ' AND t.classification = ?';
-    params.push(classification);
+    query = query.eq('classification', classification);
   }
 
   if (unmatched === 'true') {
-    query += ' AND t.matched_invoice_id IS NULL';
+    query = query.is('matched_invoice_id', null);
   }
 
-  query += ' ORDER BY t.date DESC';
+  const { data } = await query.order('date', { ascending: false });
 
-  const transactions = db.prepare(query).all(...params);
+  const transactions = (data || []).map((row: Record<string, unknown>) => {
+    const invoiceData = row.invoices as { vendor: string; original_filename: string } | null;
+    return {
+      ...row,
+      invoices: undefined,
+      matched_vendor: invoiceData?.vendor || null,
+      matched_invoice_file: invoiceData?.original_filename || null,
+    };
+  });
+
   return NextResponse.json({ transactions, year, quarter });
 }
 
@@ -33,28 +44,29 @@ export async function PATCH(request: NextRequest) {
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 
   const allowedFields = ['description', 'counterparty', 'classification', 'category', 'matched_invoice_id'];
-  const setClauses: string[] = [];
-  const values: unknown[] = [];
+  const updateData: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(updates)) {
     if (allowedFields.includes(key)) {
-      setClauses.push(`${key} = ?`);
-      values.push(value);
+      updateData[key] = value;
     }
   }
 
-  if (setClauses.length === 0) return NextResponse.json({ error: 'No valid fields' }, { status: 400 });
-  values.push(id);
+  if (Object.keys(updateData).length === 0) return NextResponse.json({ error: 'No valid fields' }, { status: 400 });
 
-  db.prepare(`UPDATE transactions SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+  await supabase.from('transactions').update(updateData).eq('id', id);
 
   // Learn classification rule
   if (updates.classification && updates.classification !== 'unknown') {
-    const tx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id) as Transaction;
+    const { data: tx } = await supabase.from('transactions').select('*').eq('id', id).single();
     if (tx?.counterparty) {
-      db.prepare(
-        'INSERT OR REPLACE INTO classification_rules (id, pattern, field, classification, category) VALUES (?, ?, ?, ?, ?)'
-      ).run(`rule_tx_${tx.counterparty.toLowerCase().replace(/\s+/g, '_')}`, tx.counterparty, 'counterparty', updates.classification, updates.category || tx.category);
+      await supabase.from('classification_rules').upsert({
+        id: `rule_tx_${tx.counterparty.toLowerCase().replace(/\s+/g, '_')}`,
+        pattern: tx.counterparty,
+        field: 'counterparty',
+        classification: updates.classification,
+        category: updates.category || tx.category,
+      }, { onConflict: 'id' });
     }
   }
 

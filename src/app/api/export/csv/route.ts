@@ -8,8 +8,8 @@ export async function GET(request: NextRequest) {
   const type = searchParams.get('type') || 'invoices';
 
   const csv = type === 'transactions'
-    ? generateTransactionCSV(year, quarter)
-    : generateInvoiceCSV(year, quarter);
+    ? await generateTransactionCSV(year, quarter)
+    : await generateInvoiceCSV(year, quarter);
 
   const filename = type === 'transactions'
     ? `Kwartio_Transacties_${year}_${quarter}.csv`

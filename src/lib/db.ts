@@ -1,94 +1,31 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
 
-const DB_DIR = path.join(process.cwd(), 'data');
-const DB_PATH = path.join(DB_DIR, 'kwartio.db');
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+export const supabase = createClient(supabaseUrl, supabaseKey);
+
+export async function getSetting(key: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', key)
+    .single();
+  return data?.value ?? null;
 }
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
-// Initialize schema
-db.exec(`
-  CREATE TABLE IF NOT EXISTS invoices (
-    id TEXT PRIMARY KEY,
-    file_path TEXT NOT NULL,
-    original_filename TEXT NOT NULL,
-    vendor TEXT,
-    amount REAL,
-    vat_amount REAL,
-    vat_rate REAL,
-    currency TEXT DEFAULT 'EUR',
-    invoice_date TEXT,
-    invoice_number TEXT,
-    description TEXT,
-    category TEXT,
-    classification TEXT DEFAULT 'unknown' CHECK(classification IN ('professional', 'personal', 'unknown')),
-    extraction_status TEXT DEFAULT 'pending' CHECK(extraction_status IN ('pending', 'processing', 'done', 'failed')),
-    extracted_data TEXT,
-    quarter TEXT,
-    year INTEGER,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS transactions (
-    id TEXT PRIMARY KEY,
-    date TEXT NOT NULL,
-    description TEXT,
-    amount REAL NOT NULL,
-    counterparty TEXT,
-    reference TEXT,
-    account_number TEXT,
-    classification TEXT DEFAULT 'unknown' CHECK(classification IN ('professional', 'personal', 'unknown')),
-    matched_invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL,
-    category TEXT,
-    source TEXT DEFAULT 'csv_import',
-    quarter TEXT,
-    year INTEGER,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS classification_rules (
-    id TEXT PRIMARY KEY,
-    pattern TEXT NOT NULL,
-    field TEXT NOT NULL CHECK(field IN ('vendor', 'counterparty', 'description')),
-    classification TEXT NOT NULL CHECK(classification IN ('professional', 'personal')),
-    category TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_invoices_quarter ON invoices(year, quarter);
-  CREATE INDEX IF NOT EXISTS idx_transactions_quarter ON transactions(year, quarter);
-  CREATE INDEX IF NOT EXISTS idx_transactions_matched ON transactions(matched_invoice_id);
-`);
-
-export default db;
-
-export function getSetting(key: string): string | null {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-  return row?.value ?? null;
+export async function setSetting(key: string, value: string): Promise<void> {
+  await supabase
+    .from('settings')
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
 }
 
-export function setSetting(key: string, value: string): void {
-  db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(key, value);
-}
-
-export function getAllSettings(): Record<string, string> {
-  const rows = db.prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
+export async function getAllSettings(): Promise<Record<string, string>> {
+  const { data } = await supabase
+    .from('settings')
+    .select('key, value');
   const result: Record<string, string> = {};
-  for (const row of rows) result[row.key] = row.value;
+  for (const row of data || []) result[row.key] = row.value;
   return result;
 }
 

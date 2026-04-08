@@ -1,6 +1,4 @@
 import Anthropic from '@anthropic-ai/sdk';
-import fs from 'fs';
-import path from 'path';
 
 const client = new Anthropic();
 
@@ -31,24 +29,22 @@ Rules:
 - Category should match one of the listed options exactly
 - Return ONLY the JSON object, nothing else`;
 
-export async function extractInvoiceData(filePath: string): Promise<Record<string, unknown>> {
-  const absolutePath = path.resolve(filePath);
-  const fileBuffer = fs.readFileSync(absolutePath);
+export async function extractInvoiceData(fileBuffer: Buffer, filename: string): Promise<Record<string, unknown>> {
   const base64 = fileBuffer.toString('base64');
 
-  const ext = path.extname(filePath).toLowerCase();
-  const isPdf = ext === '.pdf';
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  const isPdf = ext === 'pdf';
 
   let imageMediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
   if (!isPdf) {
     switch (ext) {
-      case '.png':
+      case 'png':
         imageMediaType = 'image/png';
         break;
-      case '.webp':
+      case 'webp':
         imageMediaType = 'image/webp';
         break;
-      case '.gif':
+      case 'gif':
         imageMediaType = 'image/gif';
         break;
     }
@@ -94,7 +90,6 @@ export async function extractInvoiceData(filePath: string): Promise<Record<strin
     throw new Error('No text response from Claude');
   }
 
-  // Parse JSON from response, handling potential markdown wrapping
   let jsonStr = textBlock.text.trim();
   if (jsonStr.startsWith('```')) {
     jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');

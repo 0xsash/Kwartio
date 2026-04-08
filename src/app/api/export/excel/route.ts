@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   const year = searchParams.get('year') ? parseInt(searchParams.get('year')!) : new Date().getFullYear();
   const quarter = searchParams.get('quarter') || `Q${Math.floor(new Date().getMonth() / 3) + 1}`;
 
-  const buffer = generateExcelWorkbook(year, quarter);
+  const buffer = await generateExcelWorkbook(year, quarter);
 
   return new NextResponse(new Uint8Array(buffer), {
     headers: {

@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
   const year = searchParams.get('year') ? parseInt(searchParams.get('year')!) : new Date().getFullYear();
   const quarter = searchParams.get('quarter') || `Q${Math.floor(new Date().getMonth() / 3) + 1}`;
 
-  const settings = getAllSettings();
+  const settings = await getAllSettings();
   const buffer = await generateBankStatementPDF(year, quarter, settings);
 
   return new NextResponse(new Uint8Array(buffer), {

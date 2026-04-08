@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generateQuarterlyExport } from '@/lib/export';
-import fs from 'fs';
+import { generateAccountantPackage } from '@/lib/export';
 
 export async function POST(request: NextRequest) {
   const { year, quarter } = await request.json();
@@ -9,10 +8,9 @@ export async function POST(request: NextRequest) {
   const currentQuarter = quarter || `Q${Math.floor(new Date().getMonth() / 3) + 1}`;
 
   try {
-    const zipPath = await generateQuarterlyExport(currentYear, currentQuarter);
-    const fileBuffer = fs.readFileSync(zipPath);
+    const buffer = await generateAccountantPackage(currentYear, currentQuarter);
 
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="Kwartio_${currentYear}_${currentQuarter}.zip"`,

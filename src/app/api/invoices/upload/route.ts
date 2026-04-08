@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs';
-import path from 'path';
-import db, { getQuarterFromDate } from '@/lib/db';
+import { supabase, getQuarterFromDate } from '@/lib/db';
 import { extractInvoiceData } from '@/lib/extract';
 
 export async function POST(request: NextRequest) {
@@ -13,62 +11,57 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'No files provided' }, { status: 400 });
   }
 
-  const uploadDir = path.join(process.cwd(), 'uploads');
-  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
   const results: Array<{ id: string; filename: string; status: string }> = [];
 
   for (const file of files) {
     const id = uuidv4();
-    const ext = path.extname(file.name);
-    const storedName = `${id}${ext}`;
-    const filePath = path.join(uploadDir, storedName);
+    const ext = file.name.split('.').pop() || 'pdf';
+    const storedName = `${id}.${ext}`;
 
-    // Write file to disk
     const bytes = await file.arrayBuffer();
-    fs.writeFileSync(filePath, Buffer.from(bytes));
+    const fileBuffer = Buffer.from(bytes);
+
+    // Upload to Supabase Storage
+    await supabase.storage
+      .from('invoices')
+      .upload(storedName, fileBuffer, { contentType: file.type || 'application/octet-stream' });
 
     // Insert into DB with pending status
-    db.prepare(`
-      INSERT INTO invoices (id, file_path, original_filename, extraction_status)
-      VALUES (?, ?, ?, 'pending')
-    `).run(id, storedName, file.name);
+    await supabase.from('invoices').insert({
+      id,
+      file_path: storedName,
+      original_filename: file.name,
+      extraction_status: 'pending',
+    });
 
     // Try to extract immediately
     try {
-      db.prepare("UPDATE invoices SET extraction_status = 'processing' WHERE id = ?").run(id);
-      const data = await extractInvoiceData(filePath);
+      await supabase.from('invoices').update({ extraction_status: 'processing' }).eq('id', id);
+      const data = await extractInvoiceData(fileBuffer, file.name);
 
       const dateStr = (data.invoice_date as string) || '';
       const qInfo = dateStr ? getQuarterFromDate(dateStr) : { quarter: `Q${Math.floor(new Date().getMonth() / 3) + 1}`, year: new Date().getFullYear() };
 
-      db.prepare(`
-        UPDATE invoices SET
-          vendor = ?, amount = ?, vat_amount = ?, vat_rate = ?,
-          invoice_date = ?, invoice_number = ?, description = ?,
-          category = ?, currency = ?, extracted_data = ?,
-          extraction_status = 'done', quarter = ?, year = ?,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).run(
-        data.vendor as string || null,
-        data.amount as number || null,
-        data.vat_amount as number || null,
-        data.vat_rate as number || null,
-        data.invoice_date as string || null,
-        data.invoice_number as string || null,
-        data.description as string || null,
-        data.category as string || null,
-        data.currency as string || 'EUR',
-        JSON.stringify(data),
-        qInfo.quarter,
-        qInfo.year,
-        id
-      );
+      await supabase.from('invoices').update({
+        vendor: data.vendor as string || null,
+        amount: data.amount as number || null,
+        vat_amount: data.vat_amount as number || null,
+        vat_rate: data.vat_rate as number || null,
+        invoice_date: data.invoice_date as string || null,
+        invoice_number: data.invoice_number as string || null,
+        description: data.description as string || null,
+        category: data.category as string || null,
+        currency: data.currency as string || 'EUR',
+        extracted_data: JSON.stringify(data),
+        extraction_status: 'done',
+        quarter: qInfo.quarter,
+        year: qInfo.year,
+        updated_at: new Date().toISOString(),
+      }).eq('id', id);
 
       results.push({ id, filename: file.name, status: 'extracted' });
     } catch (error) {
-      db.prepare("UPDATE invoices SET extraction_status = 'failed' WHERE id = ?").run(id);
+      await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', id);
       results.push({ id, filename: file.name, status: 'failed: ' + (error as Error).message });
     }
   }

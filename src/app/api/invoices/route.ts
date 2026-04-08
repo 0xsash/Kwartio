@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import db, { type Invoice } from '@/lib/db';
+import { supabase, type Invoice } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -7,22 +7,32 @@ export async function GET(request: NextRequest) {
   const quarter = searchParams.get('quarter') || `Q${Math.floor(new Date().getMonth() / 3) + 1}`;
   const classification = searchParams.get('classification');
 
-  let query = 'SELECT * FROM invoices WHERE year = ? AND quarter = ?';
-  const params: unknown[] = [year, quarter];
+  let query = supabase
+    .from('invoices')
+    .select('*')
+    .eq('year', year)
+    .eq('quarter', quarter);
 
   if (classification) {
-    query += ' AND classification = ?';
-    params.push(classification);
+    query = query.eq('classification', classification);
   }
 
   if (searchParams.get('unmatched') === 'true') {
-    query += ' AND id NOT IN (SELECT matched_invoice_id FROM transactions WHERE matched_invoice_id IS NOT NULL)';
+    // Get matched invoice IDs first
+    const { data: matched } = await supabase
+      .from('transactions')
+      .select('matched_invoice_id')
+      .not('matched_invoice_id', 'is', null);
+
+    const matchedIds = (matched || []).map(m => m.matched_invoice_id).filter(Boolean);
+    if (matchedIds.length > 0) {
+      query = query.not('id', 'in', `(${matchedIds.join(',')})`);
+    }
   }
 
-  query += ' ORDER BY invoice_date DESC';
+  const { data: invoices } = await query.order('invoice_date', { ascending: false }).returns<Invoice[]>();
 
-  const invoices = db.prepare(query).all(...params) as Invoice[];
-  return NextResponse.json({ invoices, year, quarter });
+  return NextResponse.json({ invoices: invoices || [], year, quarter });
 }
 
 export async function PATCH(request: NextRequest) {
@@ -32,30 +42,29 @@ export async function PATCH(request: NextRequest) {
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 
   const allowedFields = ['vendor', 'amount', 'vat_amount', 'vat_rate', 'invoice_date', 'invoice_number', 'description', 'category', 'classification'];
-  const setClauses: string[] = [];
-  const values: unknown[] = [];
+  const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
   for (const [key, value] of Object.entries(updates)) {
     if (allowedFields.includes(key)) {
-      setClauses.push(`${key} = ?`);
-      values.push(value);
+      updateData[key] = value;
     }
   }
 
-  if (setClauses.length === 0) return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
+  if (Object.keys(updateData).length <= 1) return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
 
-  setClauses.push("updated_at = datetime('now')");
-  values.push(id);
-
-  db.prepare(`UPDATE invoices SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+  await supabase.from('invoices').update(updateData).eq('id', id);
 
   // If classification changed, learn the pattern
   if (updates.classification && updates.classification !== 'unknown') {
-    const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as Invoice;
+    const { data: invoice } = await supabase.from('invoices').select('*').eq('id', id).single();
     if (invoice?.vendor) {
-      db.prepare(
-        'INSERT OR REPLACE INTO classification_rules (id, pattern, field, classification, category) VALUES (?, ?, ?, ?, ?)'
-      ).run(`rule_${invoice.vendor.toLowerCase().replace(/\s+/g, '_')}`, invoice.vendor, 'vendor', updates.classification, updates.category || invoice.category);
+      await supabase.from('classification_rules').upsert({
+        id: `rule_${invoice.vendor.toLowerCase().replace(/\s+/g, '_')}`,
+        pattern: invoice.vendor,
+        field: 'vendor',
+        classification: updates.classification,
+        category: updates.category || invoice.category,
+      }, { onConflict: 'id' });
     }
   }
 
@@ -66,7 +75,7 @@ export async function DELETE(request: NextRequest) {
   const { id } = await request.json();
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 
-  db.prepare('UPDATE transactions SET matched_invoice_id = NULL WHERE matched_invoice_id = ?').run(id);
-  db.prepare('DELETE FROM invoices WHERE id = ?').run(id);
+  await supabase.from('transactions').update({ matched_invoice_id: null }).eq('matched_invoice_id', id);
+  await supabase.from('invoices').delete().eq('id', id);
   return NextResponse.json({ success: true });
 }

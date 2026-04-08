@@ -1,40 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { supabase } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const year = searchParams.get('year') ? parseInt(searchParams.get('year')!) : new Date().getFullYear();
   const quarter = searchParams.get('quarter') || `Q${Math.floor(new Date().getMonth() / 3) + 1}`;
 
-  const invoiceStats = db.prepare(`
-    SELECT
-      COUNT(*) as total,
-      SUM(CASE WHEN classification = 'professional' THEN 1 ELSE 0 END) as professional,
-      SUM(CASE WHEN classification = 'personal' THEN 1 ELSE 0 END) as personal,
-      SUM(CASE WHEN classification = 'unknown' THEN 1 ELSE 0 END) as unclassified,
-      SUM(CASE WHEN extraction_status = 'done' THEN 1 ELSE 0 END) as extracted,
-      SUM(CASE WHEN extraction_status = 'failed' THEN 1 ELSE 0 END) as failed,
-      SUM(CASE WHEN classification = 'professional' THEN amount ELSE 0 END) as total_professional_amount,
-      SUM(CASE WHEN classification = 'professional' THEN vat_amount ELSE 0 END) as total_vat
-    FROM invoices WHERE year = ? AND quarter = ?
-  `).get(year, quarter) as Record<string, number>;
+  // Invoice stats
+  const { data: allInvoices } = await supabase
+    .from('invoices')
+    .select('classification, extraction_status, amount, vat_amount')
+    .eq('year', year)
+    .eq('quarter', quarter);
 
-  const txStats = db.prepare(`
-    SELECT
-      COUNT(*) as total,
-      SUM(CASE WHEN classification = 'professional' THEN 1 ELSE 0 END) as professional,
-      SUM(CASE WHEN classification = 'personal' THEN 1 ELSE 0 END) as personal,
-      SUM(CASE WHEN classification = 'unknown' THEN 1 ELSE 0 END) as unclassified,
-      SUM(CASE WHEN matched_invoice_id IS NOT NULL THEN 1 ELSE 0 END) as matched,
-      SUM(CASE WHEN classification = 'professional' THEN ABS(amount) ELSE 0 END) as total_professional_amount
-    FROM transactions WHERE year = ? AND quarter = ?
-  `).get(year, quarter) as Record<string, number>;
+  const invoices = allInvoices || [];
+  const invoiceStats = {
+    total: invoices.length,
+    professional: invoices.filter(i => i.classification === 'professional').length,
+    personal: invoices.filter(i => i.classification === 'personal').length,
+    unclassified: invoices.filter(i => i.classification === 'unknown').length,
+    extracted: invoices.filter(i => i.extraction_status === 'done').length,
+    failed: invoices.filter(i => i.extraction_status === 'failed').length,
+    total_professional_amount: invoices.filter(i => i.classification === 'professional').reduce((s, i) => s + (i.amount || 0), 0),
+    total_vat: invoices.filter(i => i.classification === 'professional').reduce((s, i) => s + (i.vat_amount || 0), 0),
+  };
+
+  // Transaction stats
+  const { data: allTransactions } = await supabase
+    .from('transactions')
+    .select('classification, matched_invoice_id, amount')
+    .eq('year', year)
+    .eq('quarter', quarter);
+
+  const txs = allTransactions || [];
+  const txStats = {
+    total: txs.length,
+    professional: txs.filter(t => t.classification === 'professional').length,
+    personal: txs.filter(t => t.classification === 'personal').length,
+    unclassified: txs.filter(t => t.classification === 'unknown').length,
+    matched: txs.filter(t => t.matched_invoice_id !== null).length,
+    total_professional_amount: txs.filter(t => t.classification === 'professional').reduce((s, t) => s + Math.abs(t.amount || 0), 0),
+  };
 
   return NextResponse.json({
     year,
     quarter,
     invoices: invoiceStats,
     transactions: txStats,
-    readyForExport: (invoiceStats.unclassified || 0) === 0 && (txStats.unclassified || 0) === 0,
+    readyForExport: invoiceStats.unclassified === 0 && txStats.unclassified === 0,
   });
 }

@@ -1,8 +1,6 @@
-import db, { type Invoice, type Transaction, getAllSettings } from './db';
+import { supabase, type Invoice, type Transaction, getAllSettings } from './db';
 import * as XLSX from 'xlsx';
 import archiver from 'archiver';
-import fs from 'fs';
-import path from 'path';
 import { generateBankStatementPDF, generateCoverSheetPDF } from './pdf-generate';
 
 export const CATEGORY_LABELS: Record<string, string> = {
@@ -29,16 +27,33 @@ const VAT_CODES: Record<number, string> = {
   21: '21% BTW',
 };
 
-function getInvoices(year: number, quarter: string): Invoice[] {
-  return db.prepare(
-    "SELECT * FROM invoices WHERE year = ? AND quarter = ? AND classification = 'professional' ORDER BY invoice_date"
-  ).all(year, quarter) as Invoice[];
+async function getInvoices(year: number, quarter: string): Promise<Invoice[]> {
+  const { data } = await supabase
+    .from('invoices')
+    .select('*')
+    .eq('year', year)
+    .eq('quarter', quarter)
+    .eq('classification', 'professional')
+    .order('invoice_date')
+    .returns<Invoice[]>();
+  return data || [];
 }
 
-function getTransactions(year: number, quarter: string) {
-  return db.prepare(
-    "SELECT t.*, i.vendor as matched_vendor, i.original_filename as matched_invoice FROM transactions t LEFT JOIN invoices i ON t.matched_invoice_id = i.id WHERE t.year = ? AND t.quarter = ? AND t.classification = 'professional' ORDER BY t.date"
-  ).all(year, quarter) as (Transaction & { matched_vendor: string | null; matched_invoice: string | null })[];
+async function getTransactions(year: number, quarter: string) {
+  const { data } = await supabase
+    .from('transactions')
+    .select('*, invoices!transactions_matched_invoice_id_fkey(vendor, original_filename)')
+    .eq('year', year)
+    .eq('quarter', quarter)
+    .eq('classification', 'professional')
+    .order('date')
+    .returns<(Transaction & { invoices: { vendor: string; original_filename: string } | null })[]>();
+
+  return (data || []).map(row => ({
+    ...row,
+    matched_vendor: row.invoices?.vendor || null,
+    matched_invoice: row.invoices?.original_filename || null,
+  }));
 }
 
 function buildCategoryTotals(invoices: Invoice[]) {
@@ -54,11 +69,10 @@ function buildCategoryTotals(invoices: Invoice[]) {
   return categoryTotals;
 }
 
-// Standalone Excel workbook
-export function generateExcelWorkbook(year: number, quarter: string): Buffer {
-  const invoices = getInvoices(year, quarter);
-  const transactions = getTransactions(year, quarter);
-  const settings = getAllSettings();
+export async function generateExcelWorkbook(year: number, quarter: string): Promise<Buffer> {
+  const invoices = await getInvoices(year, quarter);
+  const transactions = await getTransactions(year, quarter);
+  const settings = await getAllSettings();
   const categoryTotals = buildCategoryTotals(invoices);
 
   const wb = XLSX.utils.book_new();
@@ -173,8 +187,8 @@ export function generateExcelWorkbook(year: number, quarter: string): Buffer {
 }
 
 // CSV exports
-export function generateInvoiceCSV(year: number, quarter: string): string {
-  const invoices = getInvoices(year, quarter);
+export async function generateInvoiceCSV(year: number, quarter: string): Promise<string> {
+  const invoices = await getInvoices(year, quarter);
   const header = 'Datum;Leverancier;Factuurnummer;Omschrijving;Categorie;Bedrag excl. BTW;BTW %;BTW Bedrag;Totaal;Bestandsnaam';
   const rows = invoices.map(inv =>
     [
@@ -193,8 +207,8 @@ export function generateInvoiceCSV(year: number, quarter: string): string {
   return [header, ...rows].join('\n');
 }
 
-export function generateTransactionCSV(year: number, quarter: string): string {
-  const transactions = getTransactions(year, quarter);
+export async function generateTransactionCSV(year: number, quarter: string): Promise<string> {
+  const transactions = await getTransactions(year, quarter);
   const header = 'Datum;Tegenpartij;Omschrijving;Bedrag;Categorie;Gekoppelde Factuur;Referentie';
   const rows = transactions.map(tx =>
     [
@@ -212,9 +226,9 @@ export function generateTransactionCSV(year: number, quarter: string): string {
 
 // ZIP of just invoice PDFs
 export async function generateInvoicesZip(year: number, quarter: string): Promise<Buffer> {
-  const invoices = getInvoices(year, quarter);
+  const invoices = await getInvoices(year, quarter);
 
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const chunks: Buffer[] = [];
     const archive = archiver('zip', { zlib: { level: 9 } });
 
@@ -223,13 +237,17 @@ export async function generateInvoicesZip(year: number, quarter: string): Promis
     archive.on('error', reject);
 
     for (const inv of invoices) {
-      const filePath = path.join(process.cwd(), 'uploads', inv.file_path);
-      if (fs.existsSync(filePath)) {
+      const { data: fileData } = await supabase.storage
+        .from('invoices')
+        .download(inv.file_path);
+
+      if (fileData) {
+        const buffer = Buffer.from(await fileData.arrayBuffer());
         const cat = CATEGORY_LABELS[inv.category || 'other'] || 'Overige';
         const safeVendor = (inv.vendor || 'Onbekend').replace(/[^a-zA-Z0-9\s\-]/g, '');
-        const ext = path.extname(inv.original_filename);
-        const fileName = `${inv.invoice_date || 'geen_datum'}_${safeVendor}_EUR${inv.amount?.toFixed(2) || '0.00'}${ext}`;
-        archive.file(filePath, { name: `${cat}/${fileName}` });
+        const ext = inv.original_filename.split('.').pop() || 'pdf';
+        const fileName = `${inv.invoice_date || 'geen_datum'}_${safeVendor}_EUR${inv.amount?.toFixed(2) || '0.00'}.${ext}`;
+        archive.append(buffer, { name: `${cat}/${fileName}` });
       }
     }
 
@@ -239,9 +257,9 @@ export async function generateInvoicesZip(year: number, quarter: string): Promis
 
 // Full accountant package with cover sheet + bank statement
 export async function generateAccountantPackage(year: number, quarter: string): Promise<Buffer> {
-  const invoices = getInvoices(year, quarter);
-  const transactions = getTransactions(year, quarter);
-  const settings = getAllSettings();
+  const invoices = await getInvoices(year, quarter);
+  const transactions = await getTransactions(year, quarter);
+  const settings = await getAllSettings();
   const categoryTotals = buildCategoryTotals(invoices);
 
   let grandTotal = 0;
@@ -264,9 +282,9 @@ export async function generateAccountantPackage(year: number, quarter: string): 
     generateBankStatementPDF(year, quarter, settings),
   ]);
 
-  const excelBuffer = generateExcelWorkbook(year, quarter);
+  const excelBuffer = await generateExcelWorkbook(year, quarter);
 
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const chunks: Buffer[] = [];
     const archive = archiver('zip', { zlib: { level: 9 } });
 
@@ -274,39 +292,27 @@ export async function generateAccountantPackage(year: number, quarter: string): 
     archive.on('end', () => resolve(Buffer.concat(chunks)));
     archive.on('error', reject);
 
-    // Cover sheet
     archive.append(coverSheet, { name: `Voorblad_${quarter}_${year}.pdf` });
-
-    // Excel
     archive.append(excelBuffer, { name: `Overzichten/Kwartio_${year}_${quarter}_Boekhouding.xlsx` });
-
-    // Bank statement
     archive.append(bankStatement, { name: `Bankafschriften/Bankafschrift_${quarter}_${year}.pdf` });
 
-    // Invoice files by category
     for (const inv of invoices) {
-      const filePath = path.join(process.cwd(), 'uploads', inv.file_path);
-      if (fs.existsSync(filePath)) {
+      const { data: fileData } = await supabase.storage
+        .from('invoices')
+        .download(inv.file_path);
+
+      if (fileData) {
+        const buffer = Buffer.from(await fileData.arrayBuffer());
         const cat = CATEGORY_LABELS[inv.category || 'other'] || 'Overige';
         const safeVendor = (inv.vendor || 'Onbekend').replace(/[^a-zA-Z0-9\s\-]/g, '');
-        const ext = path.extname(inv.original_filename);
-        const fileName = `${inv.invoice_date || 'geen_datum'}_${safeVendor}_EUR${inv.amount?.toFixed(2) || '0.00'}${ext}`;
-        archive.file(filePath, { name: `Facturen/${cat}/${fileName}` });
+        const ext = inv.original_filename.split('.').pop() || 'pdf';
+        const fileName = `${inv.invoice_date || 'geen_datum'}_${safeVendor}_EUR${inv.amount?.toFixed(2) || '0.00'}.${ext}`;
+        archive.append(buffer, { name: `Facturen/${cat}/${fileName}` });
       }
     }
 
     archive.finalize();
   });
-}
-
-// Legacy function kept for backward compat
-export async function generateQuarterlyExport(year: number, quarter: string): Promise<string> {
-  const exportDir = path.join(process.cwd(), 'data', 'exports');
-  if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true });
-  const zipPath = path.join(exportDir, `Kwartio_${year}_${quarter}.zip`);
-  const buffer = await generateAccountantPackage(year, quarter);
-  fs.writeFileSync(zipPath, buffer);
-  return zipPath;
 }
 
 function roundTwo(n: number): number {

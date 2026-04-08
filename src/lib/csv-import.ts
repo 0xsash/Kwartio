@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import db, { getQuarterFromDate } from './db';
+import { supabase, getQuarterFromDate } from './db';
 
 type ParsedTransaction = {
   date: string;
@@ -10,7 +10,6 @@ type ParsedTransaction = {
   accountNumber: string;
 };
 
-// Detect and parse different Belgian bank CSV formats
 export function parseCSV(content: string, bankFormat?: string): ParsedTransaction[] {
   const lines = content.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
@@ -70,9 +69,7 @@ function splitCSVLine(line: string, separator: string = ';'): string[] {
 
 function parseAmount(str: string): number {
   if (!str) return 0;
-  // Handle European format: 1.234,56 or 1234,56
   let cleaned = str.replace(/\s/g, '').replace(/"/g, '');
-  // If contains comma as decimal separator
   if (cleaned.includes(',') && (cleaned.indexOf(',') > cleaned.lastIndexOf('.') || !cleaned.includes('.'))) {
     cleaned = cleaned.replace(/\./g, '').replace(',', '.');
   }
@@ -83,16 +80,13 @@ function parseDate(str: string): string {
   if (!str) return '';
   str = str.replace(/"/g, '').trim();
 
-  // DD/MM/YYYY
   let match = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
   if (match) {
     return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
   }
-  // YYYY-MM-DD
   match = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (match) return str;
 
-  // YYYYMMDD
   match = str.match(/^(\d{4})(\d{2})(\d{2})$/);
   if (match) {
     return `${match[1]}-${match[2]}-${match[3]}`;
@@ -102,7 +96,6 @@ function parseDate(str: string): string {
 }
 
 function parseKBC(lines: string[]): ParsedTransaction[] {
-  // KBC format: Rekeningnummer;Rubrieknaam;Naam;Munt;Afschriftnummer;Datum;Omschrijving;Valuta;Detail;Bedrag;...
   const header = splitCSVLine(lines[0]);
   const dateIdx = header.findIndex(h => h.toLowerCase() === 'datum');
   const descIdx = header.findIndex(h => h.toLowerCase() === 'omschrijving');
@@ -125,7 +118,6 @@ function parseKBC(lines: string[]): ParsedTransaction[] {
 }
 
 function parseBelfius(lines: string[]): ParsedTransaction[] {
-  // Belfius: Rekening;Boekingsdatum;Afschriftnummer;Transactienummer;Rekening tegenpartij;Naam tegenpartij;Straat;Postcode;Plaats;Land;Omschrijving;Bedrag;Munt;Valutadatum;...
   const header = splitCSVLine(lines[0]);
   const dateIdx = header.findIndex(h => h.toLowerCase().includes('boekingsdatum'));
   const descIdx = header.findIndex(h => h.toLowerCase() === 'omschrijving' || h.toLowerCase() === 'mededeling');
@@ -189,7 +181,6 @@ function parseBNP(lines: string[]): ParsedTransaction[] {
 }
 
 function parseGeneric(lines: string[]): ParsedTransaction[] {
-  // Try to auto-detect columns from header
   const sep = lines[0].includes(';') ? ';' : ',';
   const header = splitCSVLine(lines[0], sep);
 
@@ -212,29 +203,45 @@ function parseGeneric(lines: string[]): ParsedTransaction[] {
   }).filter(t => t.date && t.amount !== 0);
 }
 
-export function importTransactions(parsed: ParsedTransaction[]): { imported: number; skipped: number } {
-  const insert = db.prepare(`
-    INSERT OR IGNORE INTO transactions (id, date, description, amount, counterparty, reference, account_number, source, quarter, year)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'csv_import', ?, ?)
-  `);
-  const checkDuplicate = db.prepare(
-    'SELECT id FROM transactions WHERE date = ? AND amount = ? AND counterparty = ?'
-  );
-
+export async function importTransactions(parsed: ParsedTransaction[]): Promise<{ imported: number; skipped: number }> {
   let imported = 0;
   let skipped = 0;
-  const insertMany = db.transaction((txns: ParsedTransaction[]) => {
-    for (const tx of txns) {
-      if (!tx.date) continue;
-      const existing = checkDuplicate.get(tx.date, tx.amount, tx.counterparty);
-      if (existing) { skipped++; continue; }
-      const { quarter, year } = getQuarterFromDate(tx.date);
-      const id = uuidv4();
-      insert.run(id, tx.date, tx.description, tx.amount, tx.counterparty, tx.reference, tx.accountNumber, quarter, year);
-      imported++;
-    }
-  });
 
-  insertMany(parsed);
+  for (const tx of parsed) {
+    if (!tx.date) continue;
+
+    // Duplicate check
+    const { data: existing } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('date', tx.date)
+      .eq('amount', tx.amount)
+      .eq('counterparty', tx.counterparty)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      skipped++;
+      continue;
+    }
+
+    const { quarter, year } = getQuarterFromDate(tx.date);
+    const id = uuidv4();
+
+    await supabase.from('transactions').insert({
+      id,
+      date: tx.date,
+      description: tx.description,
+      amount: tx.amount,
+      counterparty: tx.counterparty,
+      reference: tx.reference,
+      account_number: tx.accountNumber,
+      source: 'csv_import',
+      quarter,
+      year,
+    });
+
+    imported++;
+  }
+
   return { imported, skipped };
 }

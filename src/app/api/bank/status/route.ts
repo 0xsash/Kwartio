@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { checkBankConnection, isBankConnected } from '@/lib/bank-api';
 
 export async function GET() {
-  if (!isBankConnected()) {
+  const connected = await isBankConnected();
+  if (!connected) {
     return NextResponse.json({ connected: false, status: 'not_connected' });
   }
 

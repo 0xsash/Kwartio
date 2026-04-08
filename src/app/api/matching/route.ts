@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
   const currentYear = year || new Date().getFullYear();
   const currentQuarter = quarter || `Q${Math.floor(new Date().getMonth() / 3) + 1}`;
 
-  const matches = autoMatchTransactions(currentYear, currentQuarter);
+  const matches = await autoMatchTransactions(currentYear, currentQuarter);
 
   return NextResponse.json({
     matched: matches.length,

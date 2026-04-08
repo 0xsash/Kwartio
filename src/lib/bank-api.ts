@@ -1,20 +1,16 @@
 import { v4 as uuidv4 } from 'uuid';
-import db, { getSetting, setSetting, getQuarterFromDate } from './db';
+import { supabase, getSetting, setSetting, getQuarterFromDate } from './db';
 import { applyClassificationRules } from './matching';
-
-// GoCardless Bank Account Data (formerly Nordigen) — free EU Open Banking API
-// Supports all major Belgian banks: KBC, Belfius, ING, BNP Paribas Fortis, Argenta, etc.
 
 const BASE_URL = 'https://bankaccountdata.gocardless.com/api/v2';
 
 async function apiRequest(path: string, options: RequestInit = {}): Promise<Response> {
-  let accessToken = getSetting('nordigen_access_token');
-  const tokenExpiry = getSetting('nordigen_token_expiry');
+  let accessToken = await getSetting('nordigen_access_token');
+  const tokenExpiry = await getSetting('nordigen_token_expiry');
 
-  // Refresh token if expired
   if (!accessToken || (tokenExpiry && Date.now() > parseInt(tokenExpiry))) {
     await refreshAccessToken();
-    accessToken = getSetting('nordigen_access_token');
+    accessToken = await getSetting('nordigen_access_token');
   }
 
   if (!accessToken) throw new Error('Bank API niet geconfigureerd');
@@ -30,8 +26,8 @@ async function apiRequest(path: string, options: RequestInit = {}): Promise<Resp
 }
 
 async function refreshAccessToken() {
-  const secretId = getSetting('nordigen_secret_id');
-  const secretKey = getSetting('nordigen_secret_key');
+  const secretId = await getSetting('nordigen_secret_id');
+  const secretKey = await getSetting('nordigen_secret_key');
 
   if (!secretId || !secretKey) throw new Error('GoCardless API keys niet ingesteld');
 
@@ -44,15 +40,14 @@ async function refreshAccessToken() {
   if (!res.ok) throw new Error('Kon geen API token ophalen');
 
   const data = await res.json();
-  setSetting('nordigen_access_token', data.access);
-  setSetting('nordigen_token_expiry', (Date.now() + data.access_expires * 1000).toString());
+  await setSetting('nordigen_access_token', data.access);
+  await setSetting('nordigen_token_expiry', (Date.now() + data.access_expires * 1000).toString());
 
   if (data.refresh) {
-    setSetting('nordigen_refresh_token_api', data.refresh);
+    await setSetting('nordigen_refresh_token_api', data.refresh);
   }
 }
 
-// Get list of Belgian banks
 export async function getBelgianBanks(): Promise<Array<{
   id: string;
   name: string;
@@ -69,13 +64,13 @@ export async function getBelgianBanks(): Promise<Array<{
   }));
 }
 
-// Create a bank connection requisition (user needs to authorize)
 export async function createBankConnection(institutionId: string): Promise<{
   id: string;
   link: string;
 }> {
-  const redirectUrl = getSetting('app_url')
-    ? `${getSetting('app_url')}/api/auth/bank/callback`
+  const appUrl = await getSetting('app_url');
+  const redirectUrl = appUrl
+    ? `${appUrl}/api/auth/bank/callback`
     : 'http://localhost:3000/api/auth/bank/callback';
 
   const res = await apiRequest('/requisitions/', {
@@ -93,17 +88,16 @@ export async function createBankConnection(institutionId: string): Promise<{
   }
 
   const data = await res.json();
-  setSetting('nordigen_requisition_id', data.id);
+  await setSetting('nordigen_requisition_id', data.id);
   return { id: data.id, link: data.link };
 }
 
-// Check if bank connection is active
 export async function checkBankConnection(): Promise<{
   connected: boolean;
   accounts: string[];
   status: string;
 }> {
-  const reqId = getSetting('nordigen_requisition_id');
+  const reqId = await getSetting('nordigen_requisition_id');
   if (!reqId) return { connected: false, accounts: [], status: 'not_started' };
 
   try {
@@ -114,9 +108,8 @@ export async function checkBankConnection(): Promise<{
     const accounts = data.accounts || [];
 
     if (data.status === 'LN' && accounts.length > 0) {
-      // Store account IDs
-      setSetting('nordigen_accounts', JSON.stringify(accounts));
-      setSetting('bank_connected', 'true');
+      await setSetting('nordigen_accounts', JSON.stringify(accounts));
+      await setSetting('bank_connected', 'true');
       return { connected: true, accounts, status: 'linked' };
     }
 
@@ -126,14 +119,13 @@ export async function checkBankConnection(): Promise<{
   }
 }
 
-// Sync transactions from connected bank accounts
 export async function syncBankTransactions(): Promise<{
   imported: number;
   skipped: number;
   accounts: number;
   errors: string[];
 }> {
-  const accountsJson = getSetting('nordigen_accounts');
+  const accountsJson = await getSetting('nordigen_accounts');
   if (!accountsJson) return { imported: 0, skipped: 0, accounts: 0, errors: ['Geen bankrekeningen verbonden'] };
 
   const accountIds = JSON.parse(accountsJson) as string[];
@@ -141,23 +133,13 @@ export async function syncBankTransactions(): Promise<{
   let totalImported = 0;
   let totalSkipped = 0;
 
-  const checkDuplicate = db.prepare(
-    'SELECT id FROM transactions WHERE date = ? AND amount = ? AND counterparty = ?'
-  );
-  const insert = db.prepare(`
-    INSERT INTO transactions (id, date, description, amount, counterparty, reference, account_number, source, quarter, year)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'bank_api', ?, ?)
-  `);
-
   for (const accountId of accountIds) {
     try {
-      // Get account details
       const detailsRes = await apiRequest(`/accounts/${accountId}/`);
       if (!detailsRes.ok) continue;
       const details = await detailsRes.json();
       const iban = details.iban || '';
 
-      // Get transactions (last 90 days)
       const txRes = await apiRequest(`/accounts/${accountId}/transactions/`);
       if (!txRes.ok) {
         errors.push(`Account ${iban}: kon transacties niet ophalen`);
@@ -167,44 +149,63 @@ export async function syncBankTransactions(): Promise<{
       const txData = await txRes.json();
       const bookedTx = txData.transactions?.booked || [];
 
-      const insertMany = db.transaction(() => {
-        for (const tx of bookedTx) {
-          const date = tx.bookingDate || tx.valueDate || '';
-          const amount = parseFloat(tx.transactionAmount?.amount || '0');
-          const counterparty = tx.creditorName || tx.debtorName || '';
-          const description = tx.remittanceInformationUnstructured ||
-            tx.remittanceInformationUnstructuredArray?.join(' ') || '';
-          const reference = tx.transactionId || tx.internalTransactionId || '';
+      for (const tx of bookedTx) {
+        const date = tx.bookingDate || tx.valueDate || '';
+        const amount = parseFloat(tx.transactionAmount?.amount || '0');
+        const counterparty = tx.creditorName || tx.debtorName || '';
+        const description = tx.remittanceInformationUnstructured ||
+          tx.remittanceInformationUnstructuredArray?.join(' ') || '';
+        const reference = tx.transactionId || tx.internalTransactionId || '';
 
-          if (!date || amount === 0) continue;
+        if (!date || amount === 0) continue;
 
-          // Duplicate check
-          const existing = checkDuplicate.get(date, amount, counterparty);
-          if (existing) { totalSkipped++; continue; }
+        // Duplicate check
+        const { data: existing } = await supabase
+          .from('transactions')
+          .select('id')
+          .eq('date', date)
+          .eq('amount', amount)
+          .eq('counterparty', counterparty)
+          .limit(1);
 
-          const { quarter, year } = getQuarterFromDate(date);
-          const id = uuidv4();
-          insert.run(id, date, description, amount, counterparty, reference, iban, quarter, year);
-          totalImported++;
+        if (existing && existing.length > 0) {
+          totalSkipped++;
+          continue;
         }
-      });
 
-      insertMany();
+        const { quarter, year } = getQuarterFromDate(date);
+        const id = uuidv4();
+
+        await supabase.from('transactions').insert({
+          id,
+          date,
+          description,
+          amount,
+          counterparty,
+          reference,
+          account_number: iban,
+          source: 'bank_api',
+          quarter,
+          year,
+        });
+
+        totalImported++;
+      }
     } catch (e) {
       errors.push(`Account sync failed: ${(e as Error).message}`);
     }
   }
 
-  // Apply classification rules
   if (totalImported > 0) {
-    applyClassificationRules();
+    await applyClassificationRules();
   }
 
-  setSetting('bank_last_sync', new Date().toISOString());
+  await setSetting('bank_last_sync', new Date().toISOString());
 
   return { imported: totalImported, skipped: totalSkipped, accounts: accountIds.length, errors };
 }
 
-export function isBankConnected(): boolean {
-  return getSetting('bank_connected') === 'true';
+export async function isBankConnected(): Promise<boolean> {
+  const connected = await getSetting('bank_connected');
+  return connected === 'true';
 }

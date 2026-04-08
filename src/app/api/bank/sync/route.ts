@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { syncBankTransactions, isBankConnected } from '@/lib/bank-api';
 
 export async function POST() {
-  if (!isBankConnected()) {
+  const connected = await isBankConnected();
+  if (!connected) {
     return NextResponse.json({ error: 'Bank niet verbonden' }, { status: 400 });
   }
 
