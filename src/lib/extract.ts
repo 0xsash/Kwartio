@@ -97,3 +97,101 @@ export async function extractInvoiceData(fileBuffer: Buffer, filename: string): 
 
   return JSON.parse(jsonStr);
 }
+
+const TRANSACTION_EXTRACTION_PROMPT = `You are analyzing a bank statement document (PDF or image). Extract ALL transactions visible in the document.
+
+Return a JSON array of transactions. Each transaction should have:
+{
+  "date": "YYYY-MM-DD",
+  "amount": -25.99,
+  "counterparty": "Company/person name",
+  "description": "Description or communication",
+  "reference": "Reference number if visible"
+}
+
+Rules:
+- Dates in YYYY-MM-DD format
+- Amounts as numbers: negative for debits/expenses, positive for credits/income
+- Extract EVERY transaction row visible, don't skip any
+- If counterparty is not visible, use the description
+- If you can't determine a field, use null
+- Return ONLY the JSON array, nothing else
+- If this is not a bank statement or contains no transactions, return []`;
+
+export async function extractTransactionsFromDocument(
+  fileBuffer: Buffer,
+  filename: string
+): Promise<Array<{
+  date: string;
+  description: string;
+  amount: number;
+  counterparty: string;
+  reference: string;
+  accountNumber: string;
+}>> {
+  const base64 = fileBuffer.toString('base64');
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  const isPdf = ext === 'pdf';
+
+  let imageMediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
+  if (!isPdf) {
+    switch (ext) {
+      case 'png': imageMediaType = 'image/png'; break;
+      case 'webp': imageMediaType = 'image/webp'; break;
+      case 'gif': imageMediaType = 'image/gif'; break;
+    }
+  }
+
+  const contentBlock: Anthropic.Messages.ContentBlockParam = isPdf
+    ? {
+        type: 'document' as const,
+        source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
+      }
+    : {
+        type: 'image' as const,
+        source: { type: 'base64' as const, media_type: imageMediaType, data: base64 },
+      };
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 4096,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          contentBlock,
+          { type: 'text', text: TRANSACTION_EXTRACTION_PROMPT },
+        ],
+      },
+    ],
+  });
+
+  const textBlock = response.content.find((b) => b.type === 'text');
+  if (!textBlock || textBlock.type !== 'text') {
+    throw new Error('No text response from Claude');
+  }
+
+  let jsonStr = textBlock.text.trim();
+  if (jsonStr.startsWith('```')) {
+    jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+  }
+
+  const raw = JSON.parse(jsonStr) as Array<{
+    date: string;
+    amount: number;
+    counterparty: string | null;
+    description: string | null;
+    reference: string | null;
+  }>;
+
+  return raw
+    .filter(tx => tx.date && tx.amount !== 0)
+    .map(tx => ({
+      date: tx.date,
+      description: tx.description || '',
+      amount: tx.amount,
+      counterparty: tx.counterparty || '',
+      reference: tx.reference || '',
+      accountNumber: '',
+    }));
+}

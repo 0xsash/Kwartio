@@ -12,14 +12,20 @@ type Transaction = {
 
 type InvoiceOption = { id: string; vendor: string | null; amount: number | null; invoice_date: string | null };
 
-const BANK_OPTIONS = [
-  { value: "", label: "Auto-detectie" },
-  { value: "kbc", label: "KBC" },
-  { value: "belfius", label: "Belfius" },
-  { value: "ing", label: "ING" },
-  { value: "bnp", label: "BNP Paribas Fortis" },
-  { value: "generic", label: "Andere (generiek CSV)" },
-];
+function InfoBubble({ text }: { text: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span className="relative inline-block ml-1">
+      <button onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)} onClick={() => setShow(!show)} className="w-4 h-4 rounded-full bg-gray-200 text-gray-500 text-xs inline-flex items-center justify-center hover:bg-blue-100 hover:text-blue-600 transition-colors" aria-label="Info">?</button>
+      {show && (
+        <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg leading-relaxed">
+          {text}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 w-2 h-2 bg-gray-900 rotate-45" />
+        </div>
+      )}
+    </span>
+  );
+}
 
 function TransactionsContent() {
   const { queryString } = useQuarter();
@@ -27,7 +33,6 @@ function TransactionsContent() {
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [matching, setMatching] = useState(false);
-  const [bank, setBank] = useState("");
   const [importResult, setImportResult] = useState<string | null>(null);
   const [matchResult, setMatchResult] = useState<string | null>(null);
   const [matchingTxId, setMatchingTxId] = useState<string | null>(null);
@@ -46,7 +51,6 @@ function TransactionsContent() {
     setImporting(true); setImportResult(null);
     const formData = new FormData();
     formData.append("file", file);
-    if (bank) formData.append("bank", bank);
     try {
       const res = await fetch("/api/transactions/import", { method: "POST", body: formData });
       const data = await res.json();
@@ -88,24 +92,27 @@ function TransactionsContent() {
 
       {/* Import section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Bank CSV importeren</h2>
+        <div className="flex items-center gap-2 mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Bankafschrift importeren</h2>
+          <InfoBubble text="Upload een CSV- of PDF-bestand van je bank. Kwartio herkent automatisch het formaat — werkt met elke Belgische bank (KBC, Belfius, ING, BNP, ...) en ook buitenlandse banken." />
+        </div>
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Bank</label>
-            <select value={bank} onChange={(e) => setBank(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
-              {BANK_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Bestand kiezen</label>
+            <label className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg cursor-pointer hover:bg-green-700 transition-colors text-sm font-medium">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+              <input type="file" accept=".csv,.txt,.pdf" className="hidden" onChange={(e) => e.target.files?.[0] && handleImport(e.target.files[0])} disabled={importing} />
+              {importing ? "Analyseren..." : "CSV of PDF uploaden"}
+            </label>
+            <p className="text-xs text-gray-400 mt-1">CSV, TXT of PDF bankafschrift</p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">CSV bestand</label>
-            <label className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg cursor-pointer hover:bg-green-700 transition-colors text-sm">
-              <input type="file" accept=".csv,.txt" className="hidden" onChange={(e) => e.target.files?.[0] && handleImport(e.target.files[0])} disabled={importing} />
-              {importing ? "Importeren..." : "CSV uploaden"}
-            </label>
+            <button onClick={runMatching} disabled={matching || transactions.length === 0} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-medium inline-flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+              {matching ? "Matchen..." : "Auto-match met facturen"}
+            </button>
+            <InfoBubble text="Koppelt transacties automatisch aan facturen op basis van bedrag, datum en naam. Hoe meer facturen je hebt geüpload, hoe beter de matching werkt." />
           </div>
-          <button onClick={runMatching} disabled={matching || transactions.length === 0} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm">
-            {matching ? "Matchen..." : "Auto-match met facturen"}
-          </button>
         </div>
         {importResult && <p className={`mt-3 text-sm ${importResult.startsWith("Fout") ? "text-red-600" : "text-green-600"}`}>{importResult}</p>}
         {matchResult && <p className={`mt-2 text-sm ${matchResult.startsWith("Fout") ? "text-red-600" : "text-blue-600"}`}>{matchResult}</p>}
@@ -117,7 +124,7 @@ function TransactionsContent() {
           <div className="bg-white rounded-xl p-6 max-w-lg w-full mx-4 max-h-96 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold mb-4">Koppel aan factuur</h3>
             {unmatchedInvoices.length === 0 ? (
-              <p className="text-gray-500">Geen ongebruikte facturen gevonden</p>
+              <p className="text-gray-500">Geen ongebruikte facturen gevonden. Upload eerst facturen via de Facturen-pagina.</p>
             ) : (
               <div className="space-y-2">
                 {unmatchedInvoices.map((inv) => (
@@ -139,7 +146,11 @@ function TransactionsContent() {
 
       {/* Transaction list */}
       {loading ? <p className="text-gray-500">Laden...</p> : transactions.length === 0 ? (
-        <div className="text-center py-12 text-gray-500"><p className="text-lg">Nog geen transacties</p><p className="text-sm mt-1">Importeer je bankafschrift hierboven</p></div>
+        <div className="text-center py-12">
+          <svg className="mx-auto h-12 w-12 text-gray-300 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+          <p className="text-lg text-gray-500">Nog geen transacties</p>
+          <p className="text-sm text-gray-400 mt-1">Upload een CSV- of PDF-bankafschrift hierboven om te starten</p>
+        </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 text-sm text-gray-500">{transactions.length} transacties</div>

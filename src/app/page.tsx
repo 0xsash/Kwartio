@@ -17,6 +17,21 @@ type Connections = {
   bank: { connected: boolean; lastSync: string | null; configured: boolean };
 };
 
+function InfoBubble({ text }: { text: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span className="relative inline-block ml-1">
+      <button onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)} onClick={() => setShow(!show)} className="w-4 h-4 rounded-full bg-gray-200 text-gray-500 text-xs inline-flex items-center justify-center hover:bg-blue-100 hover:text-blue-600 transition-colors" aria-label="Info">?</button>
+      {show && (
+        <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg leading-relaxed">
+          {text}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 w-2 h-2 bg-gray-900 rotate-45" />
+        </div>
+      )}
+    </span>
+  );
+}
+
 function DashboardContent() {
   const { year, quarter, queryString } = useQuarter();
   const [stats, setStats] = useState<Stats | null>(null);
@@ -41,7 +56,6 @@ function DashboardContent() {
     const data = await res.json();
     setActionResult(res.ok ? `${data.imported} facturen uit inbox ge\u00EFmporteerd` : `Fout: ${data.error}`);
     setScanning(false);
-    // Refresh stats
     fetch(`/api/stats?${queryString}`).then((r) => r.json()).then(setStats);
   };
 
@@ -61,6 +75,7 @@ function DashboardContent() {
   const qp = `?year=${year}&quarter=${quarter}`;
   const gmailOk = connections?.gmail.connected;
   const bankOk = connections?.bank.connected;
+  const isEmpty = stats.invoices.total === 0 && stats.transactions.total === 0;
 
   return (
     <div className="max-w-6xl">
@@ -68,6 +83,31 @@ function DashboardContent() {
         <h1 className="text-3xl font-bold text-gray-900">Dashboard — {quarter} {year}</h1>
         <p className="text-gray-500 mt-1">Overzicht van je boekhouding dit kwartaal</p>
       </div>
+
+      {/* First-time user onboarding */}
+      {isEmpty && (
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-bold text-blue-900 mb-2">Welkom bij Kwartio!</h2>
+          <p className="text-sm text-blue-800 mb-4">Kwartio helpt je om al je facturen en banktransacties te verzamelen en klaar te maken voor je boekhouder. Zo werkt het:</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white/80 rounded-lg p-4">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-sm mb-2">1</div>
+              <p className="font-semibold text-sm text-gray-900">Facturen verzamelen</p>
+              <p className="text-xs text-gray-600 mt-1">Upload facturen (PDF/foto) of verbind je Gmail zodat Kwartio ze automatisch vindt.</p>
+            </div>
+            <div className="bg-white/80 rounded-lg p-4">
+              <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-bold text-sm mb-2">2</div>
+              <p className="font-semibold text-sm text-gray-900">Transacties importeren</p>
+              <p className="text-xs text-gray-600 mt-1">Upload een bankafschrift (CSV of PDF) — werkt met elke Belgische bank.</p>
+            </div>
+            <div className="bg-white/80 rounded-lg p-4">
+              <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-bold text-sm mb-2">3</div>
+              <p className="font-semibold text-sm text-gray-900">Exporteren</p>
+              <p className="text-xs text-gray-600 mt-1">Classificeer als professioneel/persoonlijk, en download het complete pakket voor je boekhouder.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Sync actions */}
       {(gmailOk || bankOk) && (
@@ -90,7 +130,7 @@ function DashboardContent() {
       )}
 
       {/* Not connected banner */}
-      {!gmailOk && !bankOk && (
+      {!gmailOk && !bankOk && !isEmpty && (
         <Link href="/settings" className="block mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 hover:bg-amber-100 transition-colors">
           <div className="flex items-center gap-3">
             <svg className="w-5 h-5 text-amber-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -105,15 +145,15 @@ function DashboardContent() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <Link href={`/invoices${qp}`} className="flex items-center gap-4 p-4 bg-white rounded-xl border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all">
           <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
-            <svg className="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+            <svg className="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
           </div>
-          <div><p className="font-semibold text-gray-900">Facturen</p><p className="text-sm text-gray-500">{gmailOk ? "Via inbox of handmatig" : "Upload PDF, afbeeldingen"}</p></div>
+          <div><p className="font-semibold text-gray-900">Facturen</p><p className="text-sm text-gray-500">Upload PDF&apos;s of foto&apos;s van facturen</p></div>
         </Link>
         <Link href={`/transactions${qp}`} className="flex items-center gap-4 p-4 bg-white rounded-xl border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all">
           <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
             <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
           </div>
-          <div><p className="font-semibold text-gray-900">Transacties</p><p className="text-sm text-gray-500">{bankOk ? "Via bank API of CSV" : "KBC, Belfius, ING, BNP"}</p></div>
+          <div><p className="font-semibold text-gray-900">Transacties</p><p className="text-sm text-gray-500">Upload bankafschrift (CSV of PDF)</p></div>
         </Link>
         {totalUnclassified > 0 ? (
           <Link href={`/classify${qp}`} className="flex items-center gap-4 p-4 bg-amber-50 rounded-xl border border-amber-200 hover:border-amber-300 hover:shadow-sm transition-all">
@@ -130,27 +170,34 @@ function DashboardContent() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Facturen" value={stats.invoices.total || 0} sub={`${stats.invoices.professional || 0} professioneel`} />
-        <StatCard label="Transacties" value={stats.transactions.total || 0} sub={`${stats.transactions.matched || 0} gekoppeld`} />
-        <StatCard label="Professioneel totaal" value={`\u20AC${(stats.invoices.total_professional_amount || 0).toFixed(2)}`} sub={`\u20AC${(stats.invoices.total_vat || 0).toFixed(2)} BTW`} />
-        <StatCard label="Te classificeren" value={totalUnclassified} sub={totalUnclassified === 0 ? "Alles klaar!" : "Items wachten"} alert={totalUnclassified > 0} />
-      </div>
+      {!isEmpty && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <StatCard label="Facturen" value={stats.invoices.total || 0} sub={`${stats.invoices.professional || 0} professioneel`} />
+            <StatCard label="Transacties" value={stats.transactions.total || 0} sub={`${stats.transactions.matched || 0} gekoppeld`} />
+            <StatCard label="Professioneel totaal" value={`\u20AC${(stats.invoices.total_professional_amount || 0).toFixed(2)}`} sub={`\u20AC${(stats.invoices.total_vat || 0).toFixed(2)} BTW`} />
+            <StatCard label="Te classificeren" value={totalUnclassified} sub={totalUnclassified === 0 ? "Alles klaar!" : "Items wachten"} alert={totalUnclassified > 0} />
+          </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Voortgang kwartaalpakket</h2>
-        <div className="space-y-4">
-          <ProgressRow label="Facturen ge\u00EBxtraheerd" done={stats.invoices.extracted || 0} total={stats.invoices.total || 0} />
-          <ProgressRow label="Transacties gekoppeld" done={stats.transactions.matched || 0} total={stats.transactions.total || 0} />
-          <ProgressRow label="Items geclassificeerd" done={(stats.invoices.total || 0) + (stats.transactions.total || 0) - totalUnclassified} total={(stats.invoices.total || 0) + (stats.transactions.total || 0)} />
-        </div>
-        {stats.readyForExport && (stats.invoices.total > 0 || stats.transactions.total > 0) && (
-          <Link href={`/export${qp}`} className="mt-6 inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            Kwartaalpakket downloaden
-          </Link>
-        )}
-      </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Voortgang kwartaalpakket</h2>
+              <InfoBubble text="Je kwartaalpakket is klaar zodra alle facturen ge??xtraheerd, transacties gekoppeld en items geclassificeerd zijn. Dan kun je het volledige pakket downloaden via Exporteren." />
+            </div>
+            <div className="space-y-4">
+              <ProgressRow label="Facturen ge\u00EBxtraheerd" done={stats.invoices.extracted || 0} total={stats.invoices.total || 0} />
+              <ProgressRow label="Transacties gekoppeld" done={stats.transactions.matched || 0} total={stats.transactions.total || 0} />
+              <ProgressRow label="Items geclassificeerd" done={(stats.invoices.total || 0) + (stats.transactions.total || 0) - totalUnclassified} total={(stats.invoices.total || 0) + (stats.transactions.total || 0)} />
+            </div>
+            {stats.readyForExport && (stats.invoices.total > 0 || stats.transactions.total > 0) && (
+              <Link href={`/export${qp}`} className="mt-6 inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                Kwartaalpakket downloaden
+              </Link>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -1,7 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { supabase, getQuarterFromDate } from './db';
+import Anthropic from '@anthropic-ai/sdk';
 
-type ParsedTransaction = {
+const client = new Anthropic();
+
+export type ParsedTransaction = {
   date: string;
   description: string;
   amount: number;
@@ -9,39 +12,6 @@ type ParsedTransaction = {
   reference: string;
   accountNumber: string;
 };
-
-export function parseCSV(content: string, bankFormat?: string): ParsedTransaction[] {
-  const lines = content.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length < 2) return [];
-
-  const format = bankFormat || detectBankFormat(lines);
-
-  switch (format) {
-    case 'kbc':
-      return parseKBC(lines);
-    case 'belfius':
-      return parseBelfius(lines);
-    case 'ing':
-      return parseING(lines);
-    case 'bnp':
-      return parseBNP(lines);
-    case 'generic':
-    default:
-      return parseGeneric(lines);
-  }
-}
-
-function detectBankFormat(lines: string[]): string {
-  const header = lines[0].toLowerCase();
-
-  if (header.includes('rekeningnummer') && header.includes('rubriek')) return 'kbc';
-  if (header.includes('kredietkaart') && header.includes('handelaar')) return 'kbc';
-  if (header.includes('rekening') && header.includes('boekingsdatum') && header.includes('valutadatum')) return 'belfius';
-  if (header.includes('rekening') && header.includes('muntsoort') && header.includes('afschriftnummer')) return 'ing';
-  if (header.includes('numéro de séquence') || header.includes('volgnummer')) return 'bnp';
-
-  return 'generic';
-}
 
 function splitCSVLine(line: string, separator: string = ';'): string[] {
   const result: string[] = [];
@@ -96,142 +66,104 @@ function parseDate(str: string): string {
   return str;
 }
 
-function parseKBC(lines: string[]): ParsedTransaction[] {
-  const header = splitCSVLine(lines[0]);
-  const headerLower = header.map(h => h.toLowerCase().trim());
+const CSV_MAPPING_PROMPT = `You are analyzing a bank CSV file. Given the header row and a few sample data rows, identify which columns contain the following information:
 
-  // Detect credit card vs bank account format
-  const isCreditCard = headerLower.some(h => h.includes('kredietkaart'));
+- date: The transaction date (could be "datum", "date", "boekingsdatum", "datum verrichting", etc.)
+- amount: The transaction amount in EUR (prefer "bedrag in EUR" over "bedrag" if both exist; could also be "amount", "montant")
+- counterparty: The name of the other party (could be "naam", "handelaar", "tegenpartij", "name", "beneficiary", "merchant")
+- description: A description or communication (could be "omschrijving", "mededeling", "toelichting", "description", "communication")
+- reference: A reference number (could be "referentie", "mededeling", "detail", "reference")
+- account_number: The account/card number (could be "rekeningnummer", "rekening", "kredietkaart", "account")
 
-  if (isCreditCard) {
-    const dateIdx = headerLower.findIndex(h => h.includes('datum verrichting'));
-    const amountEurIdx = headerLower.findIndex(h => h === 'bedrag in eur');
-    const amountIdx = amountEurIdx >= 0 ? amountEurIdx : headerLower.findIndex(h => h === 'bedrag');
-    const nameIdx = headerLower.findIndex(h => h.includes('handelaar'));
-    const descIdx = headerLower.findIndex(h => h.includes('toelichting'));
-    const locationIdx = headerLower.findIndex(h => h === 'locatie');
-    const accountIdx = headerLower.findIndex(h => h.includes('kredietkaart'));
+Return a JSON object mapping each field to the EXACT column header name from the CSV. If a field cannot be identified, use null.
 
-    return lines.slice(1).map(line => {
-      const cols = splitCSVLine(line);
-      if (cols.length < 5) return null;
-      const description = cols[descIdx] || cols[locationIdx] || '';
-      return {
-        date: parseDate(cols[dateIdx] || ''),
-        description: description.trim(),
-        amount: parseAmount(cols[amountIdx] || ''),
-        counterparty: (cols[nameIdx] || '').trim(),
-        reference: '',
-        accountNumber: (cols[accountIdx] || '').trim(),
-      };
-    }).filter((t): t is ParsedTransaction => t !== null && !!t.date && t.amount !== 0);
+Example response:
+{"date": "datum verrichting", "amount": "bedrag in EUR", "counterparty": "Handelaar", "description": "toelichting", "reference": null, "account_number": "kredietkaart"}
+
+Also detect the separator (usually ; or ,).
+
+Return ONLY a JSON object with this format:
+{"separator": ";", "date": "column_name", "amount": "column_name", "counterparty": "column_name", "description": "column_name", "reference": "column_name", "account_number": "column_name"}`;
+
+type ColumnMapping = {
+  separator: string;
+  date: string | null;
+  amount: string | null;
+  counterparty: string | null;
+  description: string | null;
+  reference: string | null;
+  account_number: string | null;
+};
+
+async function detectColumnsWithClaude(headerAndSample: string): Promise<ColumnMapping> {
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 256,
+    messages: [
+      {
+        role: 'user',
+        content: `${CSV_MAPPING_PROMPT}\n\nHere are the first lines of the CSV:\n\n${headerAndSample}`,
+      },
+    ],
+  });
+
+  const textBlock = response.content.find((b) => b.type === 'text');
+  if (!textBlock || textBlock.type !== 'text') {
+    throw new Error('Could not analyze CSV format');
   }
 
-  // Regular KBC bank account format
-  const dateIdx = headerLower.findIndex(h => h === 'datum');
-  const descIdx = headerLower.findIndex(h => h === 'omschrijving');
-  const amountIdx = headerLower.findIndex(h => h === 'bedrag');
-  const nameIdx = headerLower.findIndex(h => h === 'naam');
-  const detailIdx = headerLower.findIndex(h => h === 'detail');
-  const accountIdx = headerLower.findIndex(h => h === 'rekeningnummer');
+  let jsonStr = textBlock.text.trim();
+  if (jsonStr.startsWith('```')) {
+    jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+  }
 
-  return lines.slice(1).map(line => {
-    const cols = splitCSVLine(line);
-    return {
-      date: parseDate(cols[dateIdx] || ''),
-      description: cols[descIdx] || '',
-      amount: parseAmount(cols[amountIdx] || ''),
-      counterparty: cols[nameIdx] || '',
-      reference: cols[detailIdx] || '',
-      accountNumber: cols[accountIdx] || '',
-    };
-  }).filter(t => t.date && t.amount !== 0);
+  return JSON.parse(jsonStr);
 }
 
-function parseBelfius(lines: string[]): ParsedTransaction[] {
-  const header = splitCSVLine(lines[0]);
-  const dateIdx = header.findIndex(h => h.toLowerCase().includes('boekingsdatum'));
-  const descIdx = header.findIndex(h => h.toLowerCase() === 'omschrijving' || h.toLowerCase() === 'mededeling');
-  const amountIdx = header.findIndex(h => h.toLowerCase() === 'bedrag');
-  const nameIdx = header.findIndex(h => h.toLowerCase().includes('naam tegenpartij') || h.toLowerCase().includes('naam'));
-  const accountIdx = header.findIndex(h => h.toLowerCase() === 'rekening');
-  const counterAccountIdx = header.findIndex(h => h.toLowerCase().includes('rekening tegenpartij'));
+export async function parseCSV(content: string): Promise<ParsedTransaction[]> {
+  const lines = content.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [];
 
-  return lines.slice(1).map(line => {
-    const cols = splitCSVLine(line);
-    return {
-      date: parseDate(cols[dateIdx] || ''),
-      description: cols[descIdx >= 0 ? descIdx : 10] || '',
-      amount: parseAmount(cols[amountIdx] || ''),
-      counterparty: cols[nameIdx >= 0 ? nameIdx : 5] || '',
-      reference: cols[counterAccountIdx >= 0 ? counterAccountIdx : 4] || '',
-      accountNumber: cols[accountIdx >= 0 ? accountIdx : 0] || '',
-    };
-  }).filter(t => t.date && t.amount !== 0);
-}
+  // Send header + up to 3 sample rows to Claude for column detection
+  const sample = lines.slice(0, Math.min(4, lines.length)).join('\n');
+  const mapping = await detectColumnsWithClaude(sample);
 
-function parseING(lines: string[]): ParsedTransaction[] {
-  const header = splitCSVLine(lines[0]);
-  const dateIdx = header.findIndex(h => h.toLowerCase().includes('datum'));
-  const descIdx = header.findIndex(h => h.toLowerCase().includes('omschrijving') || h.toLowerCase().includes('detail'));
-  const amountIdx = header.findIndex(h => h.toLowerCase().includes('bedrag'));
-  const nameIdx = header.findIndex(h => h.toLowerCase().includes('naam') || h.toLowerCase().includes('tegenpartij'));
-  const accountIdx = header.findIndex(h => h.toLowerCase().includes('rekening'));
-
-  return lines.slice(1).map(line => {
-    const cols = splitCSVLine(line);
-    return {
-      date: parseDate(cols[dateIdx >= 0 ? dateIdx : 2] || ''),
-      description: cols[descIdx >= 0 ? descIdx : 8] || '',
-      amount: parseAmount(cols[amountIdx >= 0 ? amountIdx : 6] || ''),
-      counterparty: cols[nameIdx >= 0 ? nameIdx : 4] || '',
-      reference: '',
-      accountNumber: cols[accountIdx >= 0 ? accountIdx : 0] || '',
-    };
-  }).filter(t => t.date && t.amount !== 0);
-}
-
-function parseBNP(lines: string[]): ParsedTransaction[] {
-  const header = splitCSVLine(lines[0]);
-  const dateIdx = Math.max(0, header.findIndex(h => h.toLowerCase().includes('datum') || h.toLowerCase().includes('date')));
-  const descIdx = Math.max(0, header.findIndex(h => h.toLowerCase().includes('omschrijving') || h.toLowerCase().includes('description')));
-  const amountIdx = Math.max(0, header.findIndex(h => h.toLowerCase().includes('bedrag') || h.toLowerCase().includes('montant')));
-  const nameIdx = header.findIndex(h => h.toLowerCase().includes('naam') || h.toLowerCase().includes('nom'));
-
-  return lines.slice(1).map(line => {
-    const cols = splitCSVLine(line);
-    return {
-      date: parseDate(cols[dateIdx] || ''),
-      description: cols[descIdx] || '',
-      amount: parseAmount(cols[amountIdx] || ''),
-      counterparty: nameIdx >= 0 ? cols[nameIdx] || '' : '',
-      reference: '',
-      accountNumber: '',
-    };
-  }).filter(t => t.date && t.amount !== 0);
-}
-
-function parseGeneric(lines: string[]): ParsedTransaction[] {
-  const sep = lines[0].includes(';') ? ';' : ',';
+  const sep = mapping.separator || (lines[0].includes(';') ? ';' : ',');
   const header = splitCSVLine(lines[0], sep);
+  const headerLower = header.map(h => h.toLowerCase().trim());
 
-  const dateIdx = header.findIndex(h => /date|datum/i.test(h));
-  const descIdx = header.findIndex(h => /desc|omschrijving|mededeling|communication/i.test(h));
-  const amountIdx = header.findIndex(h => /amount|bedrag|montant/i.test(h));
-  const nameIdx = header.findIndex(h => /name|naam|tegenpartij|counterparty|beneficiary/i.test(h));
-  const refIdx = header.findIndex(h => /ref|reference|mededeling/i.test(h));
+  // Find column indices from the mapping
+  function findCol(name: string | null): number {
+    if (!name) return -1;
+    const idx = headerLower.indexOf(name.toLowerCase().trim());
+    if (idx >= 0) return idx;
+    // Fuzzy match: check if any header contains the name
+    return headerLower.findIndex(h => h.includes(name.toLowerCase().trim()));
+  }
+
+  const dateIdx = findCol(mapping.date);
+  const amountIdx = findCol(mapping.amount);
+  const counterpartyIdx = findCol(mapping.counterparty);
+  const descIdx = findCol(mapping.description);
+  const refIdx = findCol(mapping.reference);
+  const accountIdx = findCol(mapping.account_number);
+
+  if (dateIdx < 0 || amountIdx < 0) {
+    throw new Error('Kon geen datum- of bedragkolom identificeren in dit CSV-bestand');
+  }
 
   return lines.slice(1).map(line => {
     const cols = splitCSVLine(line, sep);
+    if (cols.length < 3) return null;
     return {
-      date: parseDate(cols[dateIdx >= 0 ? dateIdx : 0] || ''),
-      description: cols[descIdx >= 0 ? descIdx : 1] || '',
-      amount: parseAmount(cols[amountIdx >= 0 ? amountIdx : 2] || ''),
-      counterparty: nameIdx >= 0 ? cols[nameIdx] : '',
-      reference: refIdx >= 0 ? cols[refIdx] : '',
-      accountNumber: '',
+      date: parseDate(cols[dateIdx] || ''),
+      description: descIdx >= 0 ? (cols[descIdx] || '').trim() : '',
+      amount: parseAmount(cols[amountIdx] || ''),
+      counterparty: counterpartyIdx >= 0 ? (cols[counterpartyIdx] || '').trim() : '',
+      reference: refIdx >= 0 ? (cols[refIdx] || '').trim() : '',
+      accountNumber: accountIdx >= 0 ? (cols[accountIdx] || '').trim() : '',
     };
-  }).filter(t => t.date && t.amount !== 0);
+  }).filter((t): t is ParsedTransaction => t !== null && !!t.date && t.amount !== 0);
 }
 
 export async function importTransactions(parsed: ParsedTransaction[]): Promise<{ imported: number; skipped: number }> {
