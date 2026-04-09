@@ -8,6 +8,6 @@ export async function POST() {
     return NextResponse.json({ error: 'Gmail niet verbonden' }, { status: 400 });
   }
 
-  const result = await processGmailBatch(3);
+  const result = await processGmailBatch(5);
   return NextResponse.json(result);
 }
