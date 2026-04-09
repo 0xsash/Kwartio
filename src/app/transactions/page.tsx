@@ -8,6 +8,7 @@ type Transaction = {
   counterparty: string | null; reference: string | null; classification: string;
   matched_invoice_id: string | null; matched_vendor: string | null;
   matched_invoice_file: string | null; category: string | null;
+  account_number: string | null;
 };
 
 type InvoiceOption = { id: string; vendor: string | null; amount: number | null; invoice_date: string | null };
@@ -138,8 +139,8 @@ function TransactionsContent() {
   return (
     <div className="max-w-6xl">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Transacties</h1>
-        <p className="text-gray-500 mt-1">Importeer bankafschriften en koppel ze aan facturen</p>
+        <h1 className="text-3xl font-bold text-gray-900">Bankafschriften &amp; Transacties</h1>
+        <p className="text-gray-500 mt-1">Upload je bankafschriften (CSV of PDF van je bank) zodat je boekhouder een overzicht heeft van al je uitgaven en inkomsten.</p>
       </div>
 
       {/* Missing invoices alert */}
@@ -164,7 +165,7 @@ function TransactionsContent() {
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
         <div className="flex items-center gap-2 mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Bankafschrift importeren</h2>
-          <InfoBubble text="Upload een CSV- of PDF-bestand van je bank. Kwartio herkent automatisch het formaat — werkt met elke Belgische bank (KBC, Belfius, ING, BNP, ...) en ook buitenlandse banken. Je kan meerdere bestanden tegelijk selecteren." />
+          <InfoBubble text="Download je bankafschrift als CSV of PDF vanuit je online banking (KBC, Belfius, ING, BNP Paribas, ...) en upload het hier. Kwartio herkent automatisch het formaat. Upload gerust meerdere bestanden tegelijk — ook van verschillende rekeningen of kaarten." />
         </div>
         <div className="flex flex-wrap items-end gap-4">
           <div>
@@ -280,6 +281,7 @@ function TransactionsContent() {
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Datum</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Rekening</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Tegenpartij</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Omschrijving</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Bedrag</th>
@@ -291,6 +293,7 @@ function TransactionsContent() {
                 {displayedTransactions.map((tx) => (
                   <tr key={tx.id} className={`hover:bg-gray-50 ${missingIds.has(tx.id) ? "bg-amber-50/50" : ""}`}>
                     <td className="px-4 py-3 text-sm whitespace-nowrap">{tx.date}</td>
+                    <td className="px-4 py-3 text-xs text-gray-400 font-mono max-w-32 truncate" title={tx.account_number || undefined}>{tx.account_number ? `...${tx.account_number.slice(-8)}` : "\u2014"}</td>
                     <td className="px-4 py-3 text-sm font-medium max-w-48 truncate">{tx.counterparty || "\u2014"}</td>
                     <td className="px-4 py-3 text-sm text-gray-600 max-w-64 truncate">{tx.description || "\u2014"}</td>
                     <td className={`px-4 py-3 text-sm text-right font-mono whitespace-nowrap ${tx.amount < 0 ? "text-red-600" : "text-green-600"}`}>

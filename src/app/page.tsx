@@ -99,8 +99,8 @@ function DashboardContent() {
             </div>
             <div className="bg-white/80 rounded-lg p-4">
               <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-bold text-sm mb-2">2</div>
-              <p className="font-semibold text-sm text-gray-900">Transacties importeren</p>
-              <p className="text-xs text-gray-600 mt-1">Upload een bankafschrift (CSV of PDF) — werkt met elke Belgische bank.</p>
+              <p className="font-semibold text-sm text-gray-900">Bankafschriften uploaden</p>
+              <p className="text-xs text-gray-600 mt-1">Download je bankafschrift als CSV of PDF vanuit je online banking en upload het hier. Werkt met elke Belgische bank en kaart.</p>
             </div>
             <div className="bg-white/80 rounded-lg p-4">
               <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-bold text-sm mb-2">3</div>
@@ -155,7 +155,7 @@ function DashboardContent() {
           <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
             <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
           </div>
-          <div><p className="font-semibold text-gray-900">Transacties</p><p className="text-sm text-gray-500">Upload bankafschrift (CSV of PDF)</p></div>
+          <div><p className="font-semibold text-gray-900">Bankafschriften</p><p className="text-sm text-gray-500">Upload CSV of PDF van je bank</p></div>
         </Link>
         {totalUnclassified > 0 ? (
           <Link href={`/classify${qp}`} className="flex items-center gap-4 p-4 bg-amber-50 rounded-xl border border-amber-200 hover:border-amber-300 hover:shadow-sm transition-all">

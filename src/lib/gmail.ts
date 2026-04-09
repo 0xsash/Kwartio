@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { supabase, getSetting, setSetting, getQuarterFromDate } from './db';
 import { extractInvoiceData } from './extract';
 
@@ -212,6 +213,15 @@ async function saveGmailAttachments(
     // Skip tiny files (logos/signatures)
     if (fileBuffer.length < 5000) continue;
 
+    // Duplicate check by file hash
+    const fileHash = createHash('sha256').update(fileBuffer).digest('hex');
+    const { data: existingByHash } = await supabase
+      .from('invoices')
+      .select('id')
+      .eq('file_hash', fileHash)
+      .limit(1);
+    if (existingByHash && existingByHash.length > 0) continue;
+
     const id = uuidv4();
     const storedName = `${id}.${ext}`;
 
@@ -227,6 +237,7 @@ async function saveGmailAttachments(
       original_filename: filename,
       extraction_status: 'pending',
       extracted_data: JSON.stringify({ gmail_message_id: messageId }),
+      file_hash: fileHash,
     });
 
     savedCount++;

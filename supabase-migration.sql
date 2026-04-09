@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   classification text DEFAULT 'unknown' CHECK(classification IN ('professional', 'personal', 'unknown')),
   extraction_status text DEFAULT 'pending' CHECK(extraction_status IN ('pending', 'processing', 'done', 'failed')),
   extracted_data text,
+  file_hash text,
   quarter text,
   year integer,
   created_at timestamptz DEFAULT now(),
