@@ -7,6 +7,7 @@ import { createHash } from 'crypto';
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const files = formData.getAll('files') as File[];
+  const replaceId = formData.get('replace_id') as string | null;
 
   if (!files || files.length === 0) {
     return NextResponse.json({ error: 'No files provided' }, { status: 400 });
@@ -31,7 +32,8 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    const id = uuidv4();
+    // If replacing a needs_download placeholder, reuse its ID
+    const id = replaceId || uuidv4();
     const ext = file.name.split('.').pop() || 'pdf';
     const storedName = `${id}.${ext}`;
 
@@ -40,14 +42,24 @@ export async function POST(request: NextRequest) {
       .from('invoices')
       .upload(storedName, fileBuffer, { contentType: file.type || 'application/octet-stream' });
 
-    // Insert into DB with pending status
-    await supabase.from('invoices').insert({
-      id,
-      file_path: storedName,
-      original_filename: file.name,
-      extraction_status: 'pending',
-      file_hash: fileHash,
-    });
+    if (replaceId) {
+      // Update existing placeholder record
+      await supabase.from('invoices').update({
+        file_path: storedName,
+        original_filename: file.name,
+        extraction_status: 'pending',
+        file_hash: fileHash,
+      }).eq('id', replaceId);
+    } else {
+      // Insert new record
+      await supabase.from('invoices').insert({
+        id,
+        file_path: storedName,
+        original_filename: file.name,
+        extraction_status: 'pending',
+        file_hash: fileHash,
+      });
+    }
 
     // Try to extract immediately
     try {

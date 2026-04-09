@@ -200,8 +200,8 @@ function InvoiceRow({ inv, isExpanded, editData, onToggle, onUpdate, onDelete, o
           </select>
         </td>
         <td className="px-4 py-3">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${inv.extraction_status === "done" ? "bg-green-100 text-green-700" : inv.extraction_status === "failed" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>
-            {inv.extraction_status === "done" ? "Ge\u00EBxtraheerd" : inv.extraction_status === "failed" ? "Mislukt" : "Wachtend"}
+          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${inv.extraction_status === "done" ? "bg-green-100 text-green-700" : inv.extraction_status === "failed" ? "bg-red-100 text-red-700" : inv.extraction_status === "needs_download" ? "bg-orange-100 text-orange-700" : "bg-yellow-100 text-yellow-700"}`}>
+            {inv.extraction_status === "done" ? "Verwerkt" : inv.extraction_status === "failed" ? "Mislukt" : inv.extraction_status === "needs_download" ? "Download nodig" : "Wachtend"}
           </span>
         </td>
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -222,14 +222,42 @@ function InvoiceRow({ inv, isExpanded, editData, onToggle, onUpdate, onDelete, o
         <tr>
           <td colSpan={8} className="px-4 py-4 bg-gray-50">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* File preview */}
-              <div className="border border-gray-200 rounded-lg overflow-hidden bg-white" style={{ minHeight: 200 }}>
-                {inv.original_filename.toLowerCase().endsWith('.pdf') ? (
-                  <iframe src={`/api/files/${inv.file_path}`} className="w-full h-64" />
-                ) : (
-                  <img src={`/api/files/${inv.file_path}`} alt={inv.original_filename} className="w-full h-64 object-contain" />
-                )}
-              </div>
+              {/* File preview or upload prompt */}
+              {inv.extraction_status === "needs_download" ? (
+                <div className="border-2 border-dashed border-orange-300 rounded-lg bg-orange-50 p-6 flex flex-col items-center justify-center" style={{ minHeight: 200 }}>
+                  <svg className="w-10 h-10 text-orange-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <p className="text-sm font-medium text-orange-800 mb-1">Document moet gedownload worden</p>
+                  <p className="text-xs text-orange-600 mb-3 text-center">
+                    Dit document is beschikbaar op een overheidsportaal (MyMinfin, eBox, ...). Download het daar en upload het hier.
+                  </p>
+                  <label className="inline-flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg cursor-pointer hover:bg-orange-700 transition-colors text-sm font-medium">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                    <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        const formData = new FormData();
+                        formData.append("files", e.target.files[0]);
+                        formData.append("replace_id", inv.id);
+                        fetch("/api/invoices/upload", { method: "POST", body: formData }).then(() => {
+                          onToggle();
+                          // Trigger parent reload via re-expand trick
+                          setTimeout(() => window.location.reload(), 500);
+                        });
+                      }
+                    }} />
+                    Document uploaden
+                  </label>
+                </div>
+              ) : (
+                <div className="border border-gray-200 rounded-lg overflow-hidden bg-white" style={{ minHeight: 200 }}>
+                  {inv.original_filename.toLowerCase().endsWith('.pdf') ? (
+                    <iframe src={`/api/files/${inv.file_path}`} className="w-full h-64" />
+                  ) : (
+                    <img src={`/api/files/${inv.file_path}`} alt={inv.original_filename} className="w-full h-64 object-contain" />
+                  )}
+                </div>
+              )}
               {/* Edit form */}
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">

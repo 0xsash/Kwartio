@@ -75,39 +75,72 @@ export async function scanInboxMessageIds(): Promise<{
   const gmail = google.gmail({ version: 'v1', auth: client });
   const errors: string[] = [];
 
-  // Broad set of queries to catch invoices from all types of services:
-  // SaaS (OpenAI, Spotify, YouTube, etc.), Belgian services (Proximus, etc.),
-  // e-commerce (Bol.com, Nespresso), and government/accounting
+  // Broad queries organized by category — designed for any Belgian freelancer.
+  // Each query targets a common pattern, NOT specific individual vendors.
   const queries = [
-    // 1. Subject-based: Dutch/French/English invoice & receipt keywords
+    // --- SUBJECT-BASED (language-agnostic invoice/receipt keywords) ---
+
+    // Dutch/French/English invoice & payment terms
     'has:attachment (subject:factuur OR subject:invoice OR subject:facture OR subject:receipt OR subject:bon OR subject:bestelling OR subject:order OR subject:rekening OR subject:afrekening OR subject:creditnota OR subject:"credit note" OR subject:nota OR subject:betaling OR subject:paiement)',
 
-    // 2. Subject-based: SaaS receipt & subscription patterns
-    'has:attachment (subject:"your receipt" OR subject:"payment receipt" OR subject:"payment confirmation" OR subject:"monthly statement" OR subject:"subscription" OR subject:"renewal" OR subject:"billing statement" OR subject:"your order" OR subject:"purchase confirmation" OR subject:"bevestiging" OR subject:"confirmation")',
+    // SaaS/subscription receipt patterns (English — most SaaS uses English)
+    'has:attachment (subject:"your receipt" OR subject:"payment receipt" OR subject:"payment confirmation" OR subject:"monthly statement" OR subject:"subscription" OR subject:"renewal" OR subject:"billing statement" OR subject:"your order" OR subject:"purchase confirmation")',
 
-    // 3. From: automated senders (noreply, billing, payments, receipts)
-    'has:attachment from:(noreply OR no-reply OR billing OR payments OR receipts OR invoice OR invoicing OR factuur OR finance OR accounting OR boekhouding OR comptabilite OR orders OR notification)',
+    // Dutch/French confirmation & payment patterns
+    'has:attachment (subject:"bevestiging" OR subject:"betalingsbewijs" OR subject:"overzicht" OR subject:"maandoverzicht" OR subject:"je bestelling" OR subject:"uw factuur" OR subject:"uw bestelling" OR subject:"votre facture" OR subject:"votre commande")',
 
-    // 4. From: major SaaS & tech platforms that send receipts
-    'has:attachment from:(openai.com OR stripe.com OR spotify.com OR google.com OR apple.com OR microsoft.com OR github.com OR notion.so OR figma.com OR slack.com OR vercel.com OR digitalocean.com OR amazonaws.com OR cloudflare.com)',
+    // --- FROM-BASED (automated sender patterns) ---
 
-    // 5. From: more SaaS, AI tools, and dev services
-    'has:attachment from:(x.com OR twitter.com OR lovable.dev OR ticktick.com OR pindora.be OR pindora.com OR dropbox.com OR zoom.us OR canva.com OR adobe.com OR atlassian.com OR jetbrains.com OR heroku.com OR netlify.com OR anthropic.com)',
+    // Generic automated senders — catches most companies
+    'has:attachment from:(noreply OR no-reply OR billing OR payments OR receipts OR invoice OR invoicing OR finance OR accounting OR orders OR notification OR donotreply OR automated OR mailer OR system)',
 
-    // 6. From: Belgian telecom, utilities, and services
-    'has:attachment from:(proximus.be OR telenet.be OR orange.be OR voo.be OR scarlet.be OR engie.be OR luminus.be OR eneco.be OR fluvius.be OR water-link.be OR bol.com OR coolblue.be OR nespresso.com OR zalando.be)',
+    // --- FROM-BASED (common service categories) ---
 
-    // 7. From: Belgian government, accounting, social security
-    'has:attachment from:(minfin.fed.be OR fod.belgie.be OR socialsecurity.be OR rsz.be OR rsvz.be OR vlaanderen.be OR brussels.be OR wallonie.be OR acerta.be OR securex.be OR liantis.be OR xerius.be OR partena.be OR avixi.be OR attentia.be)',
+    // Cloud, AI & developer platforms
+    'has:attachment from:(stripe.com OR google.com OR apple.com OR microsoft.com OR github.com OR amazonaws.com OR cloudflare.com OR digitalocean.com OR heroku.com OR netlify.com OR vercel.com OR hetzner.com OR ovh.com OR scaleway.com)',
 
-    // 8. Filename-based: any PDF with invoice/receipt-like names
-    'has:attachment (filename:pdf OR filename:PDF) (factuur OR invoice OR facture OR receipt OR bon OR nota OR credit OR statement OR rekening OR ontvangstbewijs)',
+    // Productivity, design & collaboration SaaS
+    'has:attachment from:(notion.so OR figma.com OR canva.com OR slack.com OR zoom.us OR dropbox.com OR adobe.com OR atlassian.com OR jetbrains.com OR 1password.com OR lastpass.com OR trello.com OR asana.com OR monday.com OR miro.com)',
 
-    // 9. Gmail auto-categorized purchases (catches many automated receipts)
+    // Social media, entertainment & consumer subscriptions
+    'has:attachment from:(x.com OR twitter.com OR spotify.com OR linkedin.com OR meta.com OR facebook.com OR instagram.com OR tiktok.com OR twitch.tv OR patreon.com OR substack.com)',
+
+    // AI services
+    'has:attachment from:(openai.com OR anthropic.com OR huggingface.co OR replicate.com OR stability.ai OR midjourney.com OR perplexity.ai)',
+
+    // Belgian telecom & utilities (major providers)
+    'has:attachment from:(proximus.be OR telenet.be OR orange.be OR voo.be OR scarlet.be OR mobile-vikings.be OR engie.be OR luminus.be OR eneco.be OR fluvius.be OR water-link.be OR totalenergies.be)',
+
+    // Belgian e-commerce & retail
+    'has:attachment from:(bol.com OR coolblue.be OR coolblue.nl OR zalando.be OR amazon.de OR amazon.fr OR amazon.com OR mediamarkt.be OR fnac.be)',
+
+    // Belgian government, tax & social security
+    'has:attachment from:(minfin.fed.be OR fod.belgie.be OR socialsecurity.be OR rsz.be OR rsvz.be OR onss.be OR inasti.be OR vlaanderen.be OR brussels.be OR wallonie.be OR fiscus.fgov.be)',
+
+    // Belgian social secretariats & HR/payroll
+    'has:attachment from:(acerta.be OR securex.be OR liantis.be OR xerius.be OR partena.be OR attentia.be OR sd-worx.be OR ucm.be OR groupe-s.be)',
+
+    // Insurance & financial services
+    'has:attachment from:(ethias.be OR ag.be OR axa.be OR belfius.be OR kbc.be OR ing.be OR bnpparibasfortis.be OR argenta.be OR paypal.com OR wise.com OR revolut.com OR mollie.com OR stripe.com)',
+
+    // --- FILE-BASED & CATCH-ALL ---
+
+    // Any PDF with invoice/receipt keywords in email body
+    'has:attachment filename:pdf (factuur OR invoice OR facture OR receipt OR bon OR nota OR credit OR statement OR rekening OR ontvangstbewijs)',
+
+    // Gmail auto-categorized purchases
     'has:attachment category:purchases',
+  ];
 
-    // 10. Catch-all: any PDF attachment from common automated addresses
-    'has:attachment filename:pdf from:(noreply OR no-reply OR donotreply OR automated OR mailer OR notification OR system)',
+  // Additional queries for government NOTIFICATION emails (often no attachment).
+  // These create "needs download" reminders for documents on portals.
+  const govNotificationQueries = [
+    // Belgian government portal notifications (may not have PDF attached)
+    'from:(minfin.fed.be OR fod.belgie.be OR fiscus.fgov.be OR socialsecurity.be OR rsz.be OR rsvz.be OR onss.be OR inasti.be) (document OR aangifte OR bijdrage OR voorheffing OR attest OR btw OR tva)',
+    // Social secretariat notifications
+    'from:(acerta.be OR securex.be OR liantis.be OR xerius.be OR partena.be OR ucm.be OR sd-worx.be) (factuur OR afrekening OR bijdrage OR document OR overzicht)',
+    // eBox notifications
+    'from:(ebox.be OR myebox.be OR csam.be OR itsme.be) (document OR bericht OR message)',
   ];
 
   // Get already-imported message IDs
@@ -124,42 +157,62 @@ export async function scanInboxMessageIds(): Promise<{
     } catch { /* skip */ }
   }
 
-  // Run all queries in parallel to collect unique message IDs
-  const uniqueMessageIds = new Set<string>();
-  const queryResults = await Promise.allSettled(
-    queries.map(async (query) => {
-      // Use pagination to get more results per query
-      const allMessages: Array<{ id?: string | null }> = [];
-      let pageToken: string | undefined;
-      // Fetch up to 2 pages (200 results) per query
-      for (let page = 0; page < 2; page++) {
-        const res = await gmail.users.messages.list({
-          userId: 'me',
-          q: `${query} newer_than:2y`,
-          maxResults: 100,
-          pageToken,
-        });
-        allMessages.push(...(res.data.messages || []));
-        pageToken = res.data.nextPageToken || undefined;
-        if (!pageToken) break;
-      }
-      return allMessages;
-    }),
-  );
-
-  for (const result of queryResults) {
-    if (result.status === 'fulfilled') {
-      for (const msg of result.value) {
-        if (msg.id && !processedMessageIds.has(msg.id)) {
-          uniqueMessageIds.add(msg.id);
+  // Helper to run a set of queries and collect message IDs
+  async function runQueries(queryList: string[]): Promise<Set<string>> {
+    const ids = new Set<string>();
+    const results = await Promise.allSettled(
+      queryList.map(async (query) => {
+        const allMessages: Array<{ id?: string | null }> = [];
+        let pageToken: string | undefined;
+        for (let page = 0; page < 2; page++) {
+          const res = await gmail.users.messages.list({
+            userId: 'me',
+            q: `${query} newer_than:2y`,
+            maxResults: 100,
+            pageToken,
+          });
+          allMessages.push(...(res.data.messages || []));
+          pageToken = res.data.nextPageToken || undefined;
+          if (!pageToken) break;
         }
+        return allMessages;
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        for (const msg of result.value) {
+          if (msg.id && !processedMessageIds.has(msg.id)) {
+            ids.add(msg.id);
+          }
+        }
+      } else {
+        const errMsg = result.reason?.message || String(result.reason);
+        if (errMsg.includes('401') || errMsg.includes('invalid_grant') || errMsg.includes('Token')) {
+          errors.push('Gmail authenticatie verlopen. Koppel Gmail opnieuw via Instellingen.');
+          return ids;
+        }
+        errors.push(`Query failed: ${errMsg}`);
       }
-    } else {
-      const errMsg = result.reason?.message || String(result.reason);
-      if (errMsg.includes('401') || errMsg.includes('invalid_grant') || errMsg.includes('Token')) {
-        return { messageIds: [], errors: ['Gmail authenticatie verlopen. Koppel Gmail opnieuw via Instellingen.'] };
-      }
-      errors.push(`Query failed: ${errMsg}`);
+    }
+    return ids;
+  }
+
+  // Run attachment-based queries (main invoice search)
+  const uniqueMessageIds = await runQueries(queries);
+
+  if (errors.some(e => e.includes('authenticatie verlopen'))) {
+    return { messageIds: [], errors };
+  }
+
+  // Run government notification queries (may not have attachments)
+  const govMessageIds = await runQueries(govNotificationQueries);
+  // Merge: gov notification IDs that aren't already in the main set get tagged
+  const govOnlyIds = new Set<string>();
+  for (const id of govMessageIds) {
+    if (!uniqueMessageIds.has(id)) {
+      govOnlyIds.add(id);
+      uniqueMessageIds.add(id);
     }
   }
 
@@ -167,6 +220,10 @@ export async function scanInboxMessageIds(): Promise<{
   const messageIds = Array.from(uniqueMessageIds);
   if (messageIds.length > 0) {
     await setSetting('gmail_scan_queue', JSON.stringify(messageIds));
+  }
+  // Store gov-only IDs so the batch processor knows to create reminders
+  if (govOnlyIds.size > 0) {
+    await setSetting('gmail_gov_ids', JSON.stringify(Array.from(govOnlyIds)));
   }
 
   return { messageIds, errors };
@@ -222,7 +279,8 @@ export async function processGmailBatch(batchSize: number = 3): Promise<{
   return { processed: batch.length, imported, remaining: queue.length, errors };
 }
 
-// Save attachments from a Gmail message WITHOUT running Claude extraction
+// Save attachments from a Gmail message WITHOUT running Claude extraction.
+// For government notification emails without attachments, creates a reminder.
 async function saveGmailAttachments(
   gmail: ReturnType<typeof google.gmail>,
   messageId: string,
@@ -231,8 +289,13 @@ async function saveGmailAttachments(
     userId: 'me',
     id: messageId,
     format: 'metadata',
-    metadataHeaders: ['Subject', 'From'],
+    metadataHeaders: ['Subject', 'From', 'Date'],
   });
+
+  const headers = msg.data.payload?.headers || [];
+  const subject = headers.find(h => h.name === 'Subject')?.value || '';
+  const from = headers.find(h => h.name === 'From')?.value || '';
+  const dateHeader = headers.find(h => h.name === 'Date')?.value || '';
 
   // Check all parts (including nested) for attachments
   const parts = collectParts(msg.data.payload);
@@ -292,6 +355,53 @@ async function saveGmailAttachments(
     });
 
     savedCount++;
+  }
+
+  // If no attachments saved AND this is a government notification email,
+  // create a "needs_download" reminder so the user knows to fetch it from the portal
+  if (savedCount === 0) {
+    const govIdsJson = await getSetting('gmail_gov_ids');
+    const govIds: string[] = govIdsJson ? JSON.parse(govIdsJson) : [];
+    if (govIds.includes(messageId)) {
+      // Check if we already have a reminder for this message
+      const { data: existingReminder } = await supabase
+        .from('invoices')
+        .select('id')
+        .like('extracted_data', `%"gmail_message_id":"${messageId}"%`)
+        .limit(1);
+
+      if (!existingReminder || existingReminder.length === 0) {
+        // Extract a clean sender name from the From header
+        const senderMatch = from.match(/^"?([^"<]+)"?\s*</);
+        const senderName = senderMatch ? senderMatch[1].trim() : from.split('@')[0];
+
+        const emailDate = dateHeader ? new Date(dateHeader) : new Date();
+        const dateStr = emailDate.toISOString().split('T')[0];
+        const qInfo = getQuarterFromDate(dateStr);
+
+        const id = uuidv4();
+        await supabase.from('invoices').insert({
+          id,
+          file_path: '',
+          original_filename: `[Download nodig] ${subject}`,
+          extraction_status: 'needs_download',
+          extracted_data: JSON.stringify({
+            gmail_message_id: messageId,
+            reminder: true,
+            source: 'government_notification',
+            email_subject: subject,
+            email_from: from,
+            email_date: dateStr,
+          }),
+          vendor: senderName,
+          invoice_date: dateStr,
+          description: `Document beschikbaar op portaal — ${subject}`,
+          quarter: qInfo.quarter,
+          year: qInfo.year,
+        });
+        savedCount++;
+      }
+    }
   }
 
   return savedCount;
