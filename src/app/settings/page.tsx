@@ -37,6 +37,8 @@ function SettingsContent() {
   const [scanning, setScanning] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [scanPhase, setScanPhase] = useState<"idle" | "searching" | "extracting" | "done">("idle");
+  const [scanProgress, setScanProgress] = useState<{ extracted: number; total: number } | null>(null);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [bankConnecting, setBankConnecting] = useState(false);
   const [banks, setBanks] = useState<Array<{ id: string; name: string; logo: string }>>([]);
@@ -75,11 +77,11 @@ function SettingsContent() {
     window.location.href = "/api/auth/gmail";
   };
 
-  const extractPending = async () => {
-    // Keep extracting batches until none remain
+  const extractPending = async (totalToExtract: number) => {
     let totalExtracted = 0;
     let totalFailed = 0;
-    let remaining = 1; // start loop
+    let remaining = 1;
+    const grandTotal = totalToExtract;
     while (remaining > 0) {
       const res = await fetch("/api/invoices/extract", { method: "POST" });
       if (!res.ok) break;
@@ -87,7 +89,8 @@ function SettingsContent() {
       totalExtracted += data.extracted;
       totalFailed += data.failed;
       remaining = data.remaining;
-      setScanResult(`${totalExtracted} facturen verwerkt${totalFailed ? `, ${totalFailed} mislukt` : ""}${remaining > 0 ? `, ${remaining} resterend...` : " — klaar!"}`);
+      setScanProgress({ extracted: totalExtracted, total: grandTotal });
+      setScanResult(`${totalExtracted} van ${grandTotal} facturen verwerkt${totalFailed ? ` (${totalFailed} mislukt)` : ""}${remaining > 0 ? "" : " — klaar!"}`);
     }
     return { extracted: totalExtracted, failed: totalFailed };
   };
@@ -95,30 +98,36 @@ function SettingsContent() {
   const scanInbox = async () => {
     setScanning(true);
     setScanResult(null);
+    setScanPhase("searching");
+    setScanProgress(null);
     try {
-      // Phase 1: Quick scan — collect emails and save attachments
-      setScanResult("Inbox doorzoeken...");
+      // Phase 1: Quick scan — find emails and save attachments
       const res = await fetch("/api/gmail/scan", { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
         setScanResult(`Fout: ${data.error}`);
+        setScanPhase("idle");
         return;
       }
 
       if (data.errors?.length) {
         setScanResult(`${data.found} emails gevonden, ${data.imported} bijlagen opgeslagen — ${data.errors[0]}`);
-        if (data.imported === 0) return;
-      } else {
-        setScanResult(`${data.found} emails gevonden, ${data.imported} bijlagen opgeslagen. Data extractie bezig...`);
+        if (data.imported === 0) { setScanPhase("done"); return; }
       }
 
-      // Phase 2: Extract data from saved invoices
-      if (data.imported > 0) {
-        await extractPending();
-      } else {
-        setScanResult(`${data.found} emails gevonden, geen nieuwe facturen${data.errors?.length ? ` — ${data.errors[0]}` : ""}`);
+      if (data.imported === 0) {
+        setScanResult(`${data.found} emails doorzocht — geen nieuwe facturen gevonden`);
+        setScanPhase("done");
+        return;
       }
-    } catch (e) { setScanResult(`Fout: ${(e as Error).message}`); }
+
+      // Phase 2: Extract data from saved attachments
+      setScanPhase("extracting");
+      setScanProgress({ extracted: 0, total: data.imported });
+      setScanResult(`${data.found} emails gevonden, ${data.imported} nieuwe bijlagen. Gegevens extraheren...`);
+      await extractPending(data.imported);
+      setScanPhase("done");
+    } catch (e) { setScanResult(`Fout: ${(e as Error).message}`); setScanPhase("idle"); }
     finally { setScanning(false); }
   };
 
@@ -204,7 +213,34 @@ function SettingsContent() {
             ) : null}
           </div>
         </div>
-        {scanResult && <p className={`mb-3 px-4 text-sm ${scanResult.startsWith("Fout") ? "text-red-600" : "text-green-600"}`}>{scanResult}</p>}
+        {/* Scan progress */}
+        {scanning && (
+          <div className="mb-3 px-4">
+            <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+              <span>{scanPhase === "searching" ? "Inbox doorzoeken..." : scanProgress ? `${scanProgress.extracted} / ${scanProgress.total} facturen verwerkt` : "Bezig..."}</span>
+              {scanPhase === "extracting" && scanProgress && scanProgress.total > 0 && (
+                <span>{Math.round((scanProgress.extracted / scanProgress.total) * 100)}%</span>
+              )}
+            </div>
+            <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+              {scanPhase === "searching" ? (
+                /* Indeterminate animation while searching */
+                <div className="h-full bg-blue-500 rounded-full animate-pulse w-full" />
+              ) : scanProgress && scanProgress.total > 0 ? (
+                /* Real percentage bar during extraction */
+                <div
+                  className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.round((scanProgress.extracted / scanProgress.total) * 100)}%` }}
+                />
+              ) : (
+                <div className="h-full bg-blue-500 rounded-full animate-pulse w-full" />
+              )}
+            </div>
+          </div>
+        )}
+        {scanResult && !scanning && (
+          <p className={`mb-3 px-4 text-sm ${scanResult.startsWith("Fout") ? "text-red-600" : scanPhase === "done" ? "text-green-600" : "text-gray-600"}`}>{scanResult}</p>
+        )}
 
         {/* Bank */}
         <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
