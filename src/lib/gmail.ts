@@ -236,7 +236,8 @@ async function saveGmailAttachments(
 }
 
 // Recursively collect all parts from a Gmail message payload
-function collectParts(payload: { parts?: unknown[]; mimeType?: string; filename?: string; body?: { attachmentId?: string } } | undefined | null): Array<{ mimeType?: string; filename?: string; body?: { attachmentId?: string } }> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function collectParts(payload: any): Array<{ mimeType?: string; filename?: string; body?: { attachmentId?: string } }> {
   if (!payload) return [];
   const result: Array<{ mimeType?: string; filename?: string; body?: { attachmentId?: string } }> = [];
   if (payload.filename) result.push(payload);
