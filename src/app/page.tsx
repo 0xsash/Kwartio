@@ -199,7 +199,7 @@ function DashboardContent() {
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <div className="flex items-center gap-2 mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Voortgang kwartaalpakket</h2>
-              <InfoBubble text="Je kwartaalpakket is klaar zodra alle facturen ge??xtraheerd, transacties gekoppeld en items geclassificeerd zijn. Dan kun je het volledige pakket downloaden via Exporteren." />
+              <InfoBubble text="Je kwartaalpakket is klaar zodra alle facturen verwerkt, transacties gekoppeld en items geclassificeerd zijn. Dan kun je het volledige pakket downloaden via Exporteren." />
             </div>
             <div className="space-y-4">
               <ProgressRow label="Facturen ge\u00EBxtraheerd" done={stats.invoices.extracted || 0} total={stats.invoices.total || 0} />
