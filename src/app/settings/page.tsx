@@ -7,7 +7,6 @@ import { Suspense } from "react";
 type SettingsData = Record<string, string>;
 type Connections = {
   gmail: { connected: boolean; lastScan: string | null; configured: boolean };
-  bank: { connected: boolean; lastSync: string | null; configured: boolean };
 };
 
 const BUSINESS_FIELDS = [
@@ -28,16 +27,10 @@ function SettingsContent() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [scanPhase, setScanPhase] = useState<"idle" | "searching" | "extracting" | "done">("idle");
   const [scanProgress, setScanProgress] = useState<{ extracted: number; total: number } | null>(null);
-  const [syncResult, setSyncResult] = useState<string | null>(null);
-  const [bankConnecting, setBankConnecting] = useState(false);
-  const [banks, setBanks] = useState<Array<{ id: string; name: string; logo: string }>>([]);
-  const [showBankPicker, setShowBankPicker] = useState(false);
   const [showGmailConfig, setShowGmailConfig] = useState(false);
-  const [showBankConfig, setShowBankConfig] = useState(false);
 
   const successMsg = searchParams.get("success");
   const errorMsg = searchParams.get("error");
@@ -149,74 +142,23 @@ function SettingsContent() {
     }
   };
 
-  const loadBanks = async () => {
-    setBankConnecting(true);
-    try {
-      const res = await fetch("/api/bank/connect");
-      const data = await res.json();
-      if (data.banks) { setBanks(data.banks); setShowBankPicker(true); }
-      else throw new Error(data.error || "Kon banken niet laden");
-    } catch (e) { alert("Fout: " + (e as Error).message); }
-    finally { setBankConnecting(false); }
-  };
-
-  const connectBank = async (institutionId: string) => {
-    try {
-      const res = await fetch("/api/bank/connect", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ institutionId }),
-      });
-      const data = await res.json();
-      if (data.link) {
-        window.location.href = data.link;
-      } else {
-        throw new Error(data.error || "Kon bank niet verbinden");
-      }
-    } catch (e) { alert("Fout: " + (e as Error).message); }
-  };
-
-  const syncBank = async () => {
-    setSyncing(true);
-    setSyncResult(null);
-    try {
-      const res = await fetch("/api/bank/sync", { method: "POST" });
-      const data = await res.json();
-      if (res.ok) {
-        const imported = (data.imported as number) ?? 0;
-        const skipped = (data.skipped as number) ?? 0;
-        setSyncResult(`${imported} transacties ge\u00EFmporteerd, ${skipped} duplicaten overgeslagen`);
-      } else {
-        setSyncResult(`Fout: ${data.error || "Onbekende fout"}`);
-      }
-    } catch (e) { setSyncResult(`Fout: ${(e as Error).message}`); }
-    finally { setSyncing(false); }
-  };
-
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-500">Laden...</div>;
 
   const gmailConnected = connections?.gmail?.connected === true;
   const gmailConfigured = connections?.gmail?.configured === true;
-  const bankConnected = connections?.bank?.connected === true;
-  const bankConfigured = connections?.bank?.configured === true;
   const gmailLastScan = connections?.gmail?.lastScan ?? null;
-  const bankLastSync = connections?.bank?.lastSync ?? null;
 
   return (
     <div className="max-w-3xl">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Instellingen</h1>
-        <p className="text-gray-500 mt-1">Verbind je accounts en configureer je bedrijfsgegevens</p>
+        <p className="text-gray-500 mt-1">Verbind je Gmail en configureer je bedrijfsgegevens</p>
       </div>
 
       {/* Status messages */}
       {successMsg === "gmail_connected" && (
         <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
           Gmail succesvol verbonden! Je kunt nu je inbox scannen op facturen.
-        </div>
-      )}
-      {successMsg === "bank_connected" && (
-        <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
-          Bankrekening succesvol verbonden! Je kunt nu transacties ophalen.
         </div>
       )}
       {errorMsg && (
@@ -242,7 +184,7 @@ function SettingsContent() {
                 )}
               </div>
               <p className="text-sm text-gray-500 mt-0.5">
-                Kwartio scant je inbox automatisch op facturen en ontvangstbewijzen als PDF-bijlage.
+                Kwartio doorzoekt je inbox op facturen en ontvangstbewijzen van SaaS-abonnementen, leveranciers en diensten.
               </p>
             </div>
           </div>
@@ -290,7 +232,6 @@ function SettingsContent() {
         {!gmailConnected && (
           <div className="mt-3">
             {gmailConfigured ? (
-              /* Configured but not yet authorized */
               <div className="bg-blue-50 rounded-lg p-4">
                 <p className="text-sm text-blue-800 font-medium mb-1">API-sleutels opgeslagen</p>
                 <p className="text-xs text-blue-700 mb-3">Klik hieronder om Kwartio toegang te geven tot je Gmail-inbox.</p>
@@ -299,7 +240,6 @@ function SettingsContent() {
                 </button>
               </div>
             ) : (
-              /* Not yet configured */
               <div>
                 <button
                   onClick={() => setShowGmailConfig(!showGmailConfig)}
@@ -364,143 +304,21 @@ function SettingsContent() {
         )}
       </div>
 
-      {/* Bank integration */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${bankConnected ? "bg-green-100" : "bg-gray-100"}`}>
-              <svg className={`w-5 h-5 ${bankConnected ? "text-green-600" : "text-gray-500"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-              </svg>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-semibold text-gray-900">Bankrekening</h2>
-                {bankConnected && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">Verbonden</span>
-                )}
-              </div>
-              <p className="text-sm text-gray-500 mt-0.5">
-                Haalt je banktransacties automatisch op via GoCardless — werkt met alle Belgische banken.
-              </p>
-            </div>
+      {/* Manual upload tip */}
+      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6">
+        <div className="flex items-start gap-3">
+          <svg className="w-5 h-5 text-gray-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-gray-700">Bankafschriften &amp; extra facturen</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Upload je bankafschriften (CSV/PDF) op de <a href="/transactions" className="text-blue-600 hover:underline">Bankafschriften-pagina</a>.
+              Facturen die niet via Gmail binnenkomen (papieren bonnen, screenshots, downloads van portals) kun je uploaden op de <a href="/invoices" className="text-blue-600 hover:underline">Facturen-pagina</a>.
+            </p>
           </div>
-          {bankConnected && (
-            <button
-              onClick={syncBank}
-              disabled={syncing}
-              className="ml-4 px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 flex-shrink-0"
-            >
-              {syncing ? "Ophalen..." : "Transacties ophalen"}
-            </button>
-          )}
         </div>
-
-        {syncResult && (
-          <p className={`mb-3 text-sm ${syncResult.startsWith("Fout") ? "text-red-600" : "text-green-600"}`}>
-            {syncResult}
-          </p>
-        )}
-
-        {/* Configuration accordion */}
-        {!bankConnected && (
-          <div className="mt-3">
-            {bankConfigured ? (
-              /* Configured but not yet authorized */
-              <div className="bg-green-50 rounded-lg p-4">
-                <p className="text-sm text-green-800 font-medium mb-1">API-sleutels opgeslagen</p>
-                <p className="text-xs text-green-700 mb-3">Kies je bank hieronder om Kwartio toegang te geven tot je rekening.</p>
-                <button
-                  onClick={loadBanks}
-                  disabled={bankConnecting}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-                >
-                  {bankConnecting ? "Laden..." : "Bank kiezen en verbinden"}
-                </button>
-              </div>
-            ) : (
-              /* Not yet configured */
-              <div>
-                <button
-                  onClick={() => setShowBankConfig(!showBankConfig)}
-                  className="flex items-center gap-2 text-sm text-green-700 hover:text-green-900 font-medium"
-                >
-                  <svg className={`w-4 h-4 transition-transform ${showBankConfig ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                  Instellen (vereist GoCardless-sleutels)
-                </button>
-
-                {showBankConfig && (
-                  <div className="mt-3 space-y-3 pl-6 border-l-2 border-gray-100">
-                    <div className="bg-amber-50 rounded-lg p-3 text-xs text-amber-800">
-                      <p className="font-medium mb-1">Hoe kom je aan GoCardless-sleutels?</p>
-                      <ol className="list-decimal list-inside space-y-1">
-                        <li>Maak een gratis account aan op <span className="font-mono">bankaccountdata.gocardless.com</span></li>
-                        <li>Ga naar &quot;User Secrets&quot; in het dashboard</li>
-                        <li>Klik op &quot;Create new secret&quot;</li>
-                        <li>Kopieer Secret ID en Secret Key hieronder</li>
-                      </ol>
-                      <p className="mt-2 text-amber-700">GoCardless is gratis tot 50 aanvragen per dag — meer dan genoeg voor persoonlijk gebruik.</p>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">GoCardless Secret ID</label>
-                      <input
-                        type="text"
-                        value={settings["nordigen_secret_id"] || ""}
-                        onChange={(e) => updateField("nordigen_secret_id", e.target.value)}
-                        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500 font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">GoCardless Secret Key</label>
-                      <input
-                        type="password"
-                        value={settings["nordigen_secret_key"] || ""}
-                        onChange={(e) => updateField("nordigen_secret_key", e.target.value)}
-                        placeholder="xxxxxxxx..."
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500 font-mono"
-                      />
-                    </div>
-                    <p className="text-xs text-gray-400">
-                      Sla eerst op met de knop onderaan, dan verschijnt de &quot;Bank kiezen&quot;-knop.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {bankConnected && bankLastSync && (
-          <p className="text-xs text-gray-400 mt-2">
-            Laatste sync: {new Date(bankLastSync).toLocaleString("nl-BE")}
-          </p>
-        )}
-        {bankConnected && !bankLastSync && (
-          <p className="text-xs text-gray-400 mt-2">Nog niet gesynchroniseerd — klik op &quot;Transacties ophalen&quot; om te starten.</p>
-        )}
       </div>
-
-      {/* Bank picker modal */}
-      {showBankPicker && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowBankPicker(false)}>
-          <div className="bg-white rounded-xl p-6 max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-4">Kies je bank</h3>
-            <div className="space-y-2">
-              {banks.map((bank) => (
-                <button key={bank.id} onClick={() => connectBank(bank.id)}
-                  className="w-full flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-colors">
-                  {bank.logo && <img src={bank.logo} alt="" className="w-8 h-8 object-contain" />}
-                  <span className="font-medium text-sm">{bank.name}</span>
-                </button>
-              ))}
-            </div>
-            <button onClick={() => setShowBankPicker(false)} className="mt-4 w-full py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">Annuleren</button>
-          </div>
-        </div>
-      )}
 
       {/* Business details */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">

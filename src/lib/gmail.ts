@@ -75,10 +75,39 @@ export async function scanInboxMessageIds(): Promise<{
   const gmail = google.gmail({ version: 'v1', auth: client });
   const errors: string[] = [];
 
+  // Broad set of queries to catch invoices from all types of services:
+  // SaaS (OpenAI, Spotify, YouTube, etc.), Belgian services (Proximus, etc.),
+  // e-commerce (Bol.com, Nespresso), and government/accounting
   const queries = [
-    'has:attachment (subject:factuur OR subject:invoice OR subject:facture OR subject:receipt OR subject:bon OR subject:bestelling OR subject:order OR subject:payment OR subject:betaling OR subject:paiement OR subject:creditnota OR subject:credit note OR subject:nota OR subject:afrekening OR subject:rekening)',
-    'has:attachment from:(noreply OR no-reply OR billing OR invoice OR factuur OR facture OR finance OR accounting OR boekhouding OR comptabilite OR admin OR info OR support)',
-    'has:attachment (filename:pdf OR filename:PDF) (factuur OR invoice OR facture OR receipt OR bon OR nota OR credit)',
+    // 1. Subject-based: Dutch/French/English invoice & receipt keywords
+    'has:attachment (subject:factuur OR subject:invoice OR subject:facture OR subject:receipt OR subject:bon OR subject:bestelling OR subject:order OR subject:rekening OR subject:afrekening OR subject:creditnota OR subject:"credit note" OR subject:nota OR subject:betaling OR subject:paiement)',
+
+    // 2. Subject-based: SaaS receipt & subscription patterns
+    'has:attachment (subject:"your receipt" OR subject:"payment receipt" OR subject:"payment confirmation" OR subject:"monthly statement" OR subject:"subscription" OR subject:"renewal" OR subject:"billing statement" OR subject:"your order" OR subject:"purchase confirmation" OR subject:"bevestiging" OR subject:"confirmation")',
+
+    // 3. From: automated senders (noreply, billing, payments, receipts)
+    'has:attachment from:(noreply OR no-reply OR billing OR payments OR receipts OR invoice OR invoicing OR factuur OR finance OR accounting OR boekhouding OR comptabilite OR orders OR notification)',
+
+    // 4. From: major SaaS & tech platforms that send receipts
+    'has:attachment from:(openai.com OR stripe.com OR spotify.com OR google.com OR apple.com OR microsoft.com OR github.com OR notion.so OR figma.com OR slack.com OR vercel.com OR digitalocean.com OR amazonaws.com OR cloudflare.com)',
+
+    // 5. From: more SaaS, AI tools, and dev services
+    'has:attachment from:(x.com OR twitter.com OR lovable.dev OR ticktick.com OR pindora.be OR pindora.com OR dropbox.com OR zoom.us OR canva.com OR adobe.com OR atlassian.com OR jetbrains.com OR heroku.com OR netlify.com OR anthropic.com)',
+
+    // 6. From: Belgian telecom, utilities, and services
+    'has:attachment from:(proximus.be OR telenet.be OR orange.be OR voo.be OR scarlet.be OR engie.be OR luminus.be OR eneco.be OR fluvius.be OR water-link.be OR bol.com OR coolblue.be OR nespresso.com OR zalando.be)',
+
+    // 7. From: Belgian government, accounting, social security
+    'has:attachment from:(minfin.fed.be OR fod.belgie.be OR socialsecurity.be OR rsz.be OR rsvz.be OR vlaanderen.be OR brussels.be OR wallonie.be OR acerta.be OR securex.be OR liantis.be OR xerius.be OR partena.be OR avixi.be OR attentia.be)',
+
+    // 8. Filename-based: any PDF with invoice/receipt-like names
+    'has:attachment (filename:pdf OR filename:PDF) (factuur OR invoice OR facture OR receipt OR bon OR nota OR credit OR statement OR rekening OR ontvangstbewijs)',
+
+    // 9. Gmail auto-categorized purchases (catches many automated receipts)
+    'has:attachment category:purchases',
+
+    // 10. Catch-all: any PDF attachment from common automated addresses
+    'has:attachment filename:pdf from:(noreply OR no-reply OR donotreply OR automated OR mailer OR notification OR system)',
   ];
 
   // Get already-imported message IDs
@@ -99,12 +128,22 @@ export async function scanInboxMessageIds(): Promise<{
   const uniqueMessageIds = new Set<string>();
   const queryResults = await Promise.allSettled(
     queries.map(async (query) => {
-      const res = await gmail.users.messages.list({
-        userId: 'me',
-        q: `${query} newer_than:1y`,
-        maxResults: 30,
-      });
-      return res.data.messages || [];
+      // Use pagination to get more results per query
+      const allMessages: Array<{ id?: string | null }> = [];
+      let pageToken: string | undefined;
+      // Fetch up to 2 pages (200 results) per query
+      for (let page = 0; page < 2; page++) {
+        const res = await gmail.users.messages.list({
+          userId: 'me',
+          q: `${query} newer_than:2y`,
+          maxResults: 100,
+          pageToken,
+        });
+        allMessages.push(...(res.data.messages || []));
+        pageToken = res.data.nextPageToken || undefined;
+        if (!pageToken) break;
+      }
+      return allMessages;
     }),
   );
 
@@ -222,8 +261,8 @@ async function saveGmailAttachments(
 
     const fileBuffer = Buffer.from(attachment.data.data, 'base64');
 
-    // Skip tiny files (logos/signatures)
-    if (fileBuffer.length < 5000) continue;
+    // Skip tiny files (logos/signatures) — 3KB threshold
+    if (fileBuffer.length < 3000) continue;
 
     // Duplicate check by file hash
     const fileHash = createHash('sha256').update(fileBuffer).digest('hex');

@@ -12,11 +12,6 @@ type Stats = {
   readyForExport: boolean;
 };
 
-type Connections = {
-  gmail: { connected: boolean; lastScan: string | null; configured: boolean };
-  bank: { connected: boolean; lastSync: string | null; configured: boolean };
-};
-
 function InfoBubble({ text }: { text: string }) {
   const [show, setShow] = useState(false);
   return (
@@ -35,12 +30,9 @@ function InfoBubble({ text }: { text: string }) {
 function DashboardContent() {
   const { year, quarter, queryString } = useQuarter();
   const [stats, setStats] = useState<Stats | null>(null);
-  const [connections, setConnections] = useState<Connections | null>(null);
+  const [gmailConnected, setGmailConnected] = useState(false);
   const [missingCount, setMissingCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [scanning, setScanning] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [actionResult, setActionResult] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -48,35 +40,18 @@ function DashboardContent() {
       fetch(`/api/stats?${queryString}`).then((r) => r.json()),
       fetch("/api/connections").then((r) => r.json()),
       fetch(`/api/transactions/missing-invoices?${queryString}&count=true`).then((r) => r.json()),
-    ]).then(([s, c, m]) => { setStats(s); setConnections(c); setMissingCount(m.count || 0); })
-      .finally(() => setLoading(false));
+    ]).then(([s, c, m]) => {
+      setStats(s);
+      setGmailConnected(c?.gmail?.connected === true);
+      setMissingCount(m.count || 0);
+    }).finally(() => setLoading(false));
   }, [queryString]);
-
-  const scanInbox = async () => {
-    setScanning(true); setActionResult(null);
-    const res = await fetch("/api/gmail/scan", { method: "POST" });
-    const data = await res.json();
-    setActionResult(res.ok ? `${data.imported} facturen uit inbox ge\u00EFmporteerd` : `Fout: ${data.error}`);
-    setScanning(false);
-    fetch(`/api/stats?${queryString}`).then((r) => r.json()).then(setStats);
-  };
-
-  const syncBank = async () => {
-    setSyncing(true); setActionResult(null);
-    const res = await fetch("/api/bank/sync", { method: "POST" });
-    const data = await res.json();
-    setActionResult(res.ok ? `${data.imported} transacties opgehaald` : `Fout: ${data.error}`);
-    setSyncing(false);
-    fetch(`/api/stats?${queryString}`).then((r) => r.json()).then(setStats);
-  };
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-500">Laden...</div>;
   if (!stats) return <div className="text-red-500">Fout bij laden van statistieken</div>;
 
   const totalUnclassified = (stats.invoices.unclassified || 0) + (stats.transactions.unclassified || 0);
   const qp = `?year=${year}&quarter=${quarter}`;
-  const gmailOk = connections?.gmail.connected;
-  const bankOk = connections?.bank.connected;
   const isEmpty = stats.invoices.total === 0 && stats.transactions.total === 0;
 
   return (
@@ -111,34 +86,14 @@ function DashboardContent() {
         </div>
       )}
 
-      {/* Sync actions */}
-      {(gmailOk || bankOk) && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm font-medium text-blue-800">Alles ophalen:</span>
-            {gmailOk && (
-              <button onClick={scanInbox} disabled={scanning} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
-                {scanning ? "Inbox scannen..." : "Inbox scannen"}
-              </button>
-            )}
-            {bankOk && (
-              <button onClick={syncBank} disabled={syncing} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
-                {syncing ? "Bank ophalen..." : "Bank ophalen"}
-              </button>
-            )}
-            {actionResult && <span className={`text-sm ${actionResult.startsWith("Fout") ? "text-red-600" : "text-green-700"}`}>{actionResult}</span>}
-          </div>
-        </div>
-      )}
-
       {/* Not connected banner */}
-      {!gmailOk && !bankOk && !isEmpty && (
+      {!gmailConnected && !isEmpty && (
         <Link href="/settings" className="block mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 hover:bg-amber-100 transition-colors">
           <div className="flex items-center gap-3">
             <svg className="w-5 h-5 text-amber-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
             <div>
-              <p className="font-medium text-amber-800">Verbind je Gmail en bankrekening</p>
-              <p className="text-sm text-amber-600">Ga naar Instellingen om je accounts te koppelen. Daarna haalt Kwartio alles automatisch op.</p>
+              <p className="font-medium text-amber-800">Verbind je Gmail</p>
+              <p className="text-sm text-amber-600">Ga naar Instellingen om je Gmail te koppelen. Kwartio vindt dan automatisch facturen in je inbox.</p>
             </div>
           </div>
         </Link>
@@ -202,7 +157,7 @@ function DashboardContent() {
               <InfoBubble text="Je kwartaalpakket is klaar zodra alle facturen verwerkt, transacties gekoppeld en items geclassificeerd zijn. Dan kun je het volledige pakket downloaden via Exporteren." />
             </div>
             <div className="space-y-4">
-              <ProgressRow label="Facturen ge\u00EBxtraheerd" done={stats.invoices.extracted || 0} total={stats.invoices.total || 0} />
+              <ProgressRow label="Facturen verwerkt" done={stats.invoices.extracted || 0} total={stats.invoices.total || 0} />
               <ProgressRow label="Transacties gekoppeld" done={stats.transactions.matched || 0} total={stats.transactions.total || 0} />
               <ProgressRow label="Items geclassificeerd" done={(stats.invoices.total || 0) + (stats.transactions.total || 0) - totalUnclassified} total={(stats.invoices.total || 0) + (stats.transactions.total || 0)} />
             </div>
