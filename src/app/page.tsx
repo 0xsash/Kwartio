@@ -36,6 +36,7 @@ function DashboardContent() {
   const { year, quarter, queryString } = useQuarter();
   const [stats, setStats] = useState<Stats | null>(null);
   const [connections, setConnections] = useState<Connections | null>(null);
+  const [missingCount, setMissingCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -46,7 +47,8 @@ function DashboardContent() {
     Promise.all([
       fetch(`/api/stats?${queryString}`).then((r) => r.json()),
       fetch("/api/connections").then((r) => r.json()),
-    ]).then(([s, c]) => { setStats(s); setConnections(c); })
+      fetch(`/api/transactions/missing-invoices?${queryString}&count=true`).then((r) => r.json()),
+    ]).then(([s, c, m]) => { setStats(s); setConnections(c); setMissingCount(m.count || 0); })
       .finally(() => setLoading(false));
   }, [queryString]);
 
@@ -172,6 +174,21 @@ function DashboardContent() {
 
       {!isEmpty && (
         <>
+          {/* Missing invoices alert */}
+          {missingCount > 0 && (
+            <Link href={`/transactions${qp}`} className="block mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 hover:bg-amber-100 transition-colors">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
+                </div>
+                <div>
+                  <p className="font-medium text-amber-800">{missingCount} transactie{missingCount !== 1 ? "s" : ""} zonder factuur</p>
+                  <p className="text-sm text-amber-600">Professionele uitgaven waarvoor nog een factuur ontbreekt. Klik om te bekijken en facturen toe te voegen.</p>
+                </div>
+              </div>
+            </Link>
+          )}
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <StatCard label="Facturen" value={stats.invoices.total || 0} sub={`${stats.invoices.professional || 0} professioneel`} />
             <StatCard label="Transacties" value={stats.transactions.total || 0} sub={`${stats.transactions.matched || 0} gekoppeld`} />
