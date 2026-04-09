@@ -285,11 +285,12 @@ async function saveGmailAttachments(
   gmail: ReturnType<typeof google.gmail>,
   messageId: string,
 ): Promise<number> {
+  // MUST use format 'full' to get payload.parts (attachment info).
+  // 'metadata' only returns headers, NOT the parts tree.
   const msg = await gmail.users.messages.get({
     userId: 'me',
     id: messageId,
-    format: 'metadata',
-    metadataHeaders: ['Subject', 'From', 'Date'],
+    format: 'full',
   });
 
   const headers = msg.data.payload?.headers || [];
