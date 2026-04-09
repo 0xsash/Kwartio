@@ -77,31 +77,14 @@ function SettingsContent() {
     window.location.href = "/api/auth/gmail";
   };
 
-  const extractPending = async (totalToExtract: number) => {
-    let totalExtracted = 0;
-    let totalFailed = 0;
-    let remaining = 1;
-    const grandTotal = totalToExtract;
-    while (remaining > 0) {
-      const res = await fetch("/api/invoices/extract", { method: "POST" });
-      if (!res.ok) break;
-      const data = await res.json();
-      totalExtracted += data.extracted;
-      totalFailed += data.failed;
-      remaining = data.remaining;
-      setScanProgress({ extracted: totalExtracted, total: grandTotal });
-      setScanResult(`${totalExtracted} van ${grandTotal} facturen verwerkt${totalFailed ? ` (${totalFailed} mislukt)` : ""}${remaining > 0 ? "" : " — klaar!"}`);
-    }
-    return { extracted: totalExtracted, failed: totalFailed };
-  };
-
   const scanInbox = async () => {
     setScanning(true);
     setScanResult(null);
     setScanPhase("searching");
     setScanProgress(null);
     try {
-      // Phase 1: Quick scan — find emails and save attachments
+      // Step 1: Quick search — just find message IDs (fast, no downloads)
+      setScanResult("Inbox doorzoeken...");
       const res = await fetch("/api/gmail/scan", { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
@@ -110,22 +93,62 @@ function SettingsContent() {
         return;
       }
 
-      if (data.errors?.length) {
-        setScanResult(`${data.found} emails gevonden, ${data.imported} bijlagen opgeslagen — ${data.errors[0]}`);
-        if (data.imported === 0) { setScanPhase("done"); return; }
-      }
-
-      if (data.imported === 0) {
-        setScanResult(`${data.found} emails doorzocht — geen nieuwe facturen gevonden`);
+      if (data.errors?.length && data.found === 0) {
+        setScanResult(data.errors[0]);
         setScanPhase("done");
         return;
       }
 
-      // Phase 2: Extract data from saved attachments
+      if (data.found === 0) {
+        setScanResult("Geen nieuwe emails met bijlagen gevonden.");
+        setScanPhase("done");
+        return;
+      }
+
+      // Step 2: Download attachments in small batches
       setScanPhase("extracting");
-      setScanProgress({ extracted: 0, total: data.imported });
-      setScanResult(`${data.found} emails gevonden, ${data.imported} nieuwe bijlagen. Gegevens extraheren...`);
-      await extractPending(data.imported);
+      const totalMessages = data.found;
+      let totalProcessed = 0;
+      let totalImported = 0;
+      let remaining = totalMessages;
+
+      setScanProgress({ extracted: 0, total: totalMessages });
+      setScanResult(`${totalMessages} emails gevonden. Bijlagen ophalen...`);
+
+      while (remaining > 0) {
+        const batchRes = await fetch("/api/gmail/process-batch", { method: "POST" });
+        if (!batchRes.ok) break;
+        const batchData = await batchRes.json();
+        totalProcessed += batchData.processed;
+        totalImported += batchData.imported;
+        remaining = batchData.remaining;
+        setScanProgress({ extracted: totalProcessed, total: totalMessages });
+        setScanResult(`${totalProcessed} van ${totalMessages} emails verwerkt — ${totalImported} bijlagen opgeslagen`);
+      }
+
+      if (totalImported === 0) {
+        setScanResult(`${totalMessages} emails doorzocht — geen nieuwe facturen gevonden`);
+        setScanPhase("done");
+        return;
+      }
+
+      // Step 3: Extract data from saved invoices
+      setScanResult(`${totalImported} nieuwe bijlagen opgeslagen. Gegevens extraheren...`);
+      let totalExtracted = 0;
+      let totalFailed = 0;
+      let extractRemaining = 1;
+      setScanProgress({ extracted: 0, total: totalImported });
+      while (extractRemaining > 0) {
+        const exRes = await fetch("/api/invoices/extract", { method: "POST" });
+        if (!exRes.ok) break;
+        const exData = await exRes.json();
+        totalExtracted += exData.extracted;
+        totalFailed += exData.failed;
+        extractRemaining = exData.remaining;
+        setScanProgress({ extracted: totalExtracted, total: totalImported });
+        setScanResult(`${totalExtracted} van ${totalImported} facturen verwerkt${totalFailed ? ` (${totalFailed} mislukt)` : ""}${extractRemaining > 0 ? "" : " — klaar!"}`);
+      }
+
       setScanPhase("done");
     } catch (e) { setScanResult(`Fout: ${(e as Error).message}`); setScanPhase("idle"); }
     finally { setScanning(false); }

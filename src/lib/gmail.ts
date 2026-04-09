@@ -64,30 +64,13 @@ async function getAuthenticatedClient() {
   return client;
 }
 
-// Process a batch of items with limited concurrency
-async function processBatch<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.allSettled(batch.map(fn));
-    for (const r of batchResults) {
-      if (r.status === 'fulfilled') results.push(r.value);
-    }
-  }
-  return results;
-}
-
-export async function scanInboxForInvoices(): Promise<{
-  found: number;
-  imported: number;
+// Step 1: Quick search — just list message IDs (fast, no downloads)
+export async function scanInboxMessageIds(): Promise<{
+  messageIds: string[];
   errors: string[];
 }> {
   const client = await getAuthenticatedClient();
-  if (!client) return { found: 0, imported: 0, errors: ['Gmail niet verbonden'] };
+  if (!client) return { messageIds: [], errors: ['Gmail niet verbonden'] };
 
   const gmail = google.gmail({ version: 'v1', auth: client });
   const errors: string[] = [];
@@ -112,14 +95,14 @@ export async function scanInboxForInvoices(): Promise<{
     } catch { /* skip */ }
   }
 
-  // Phase 1: Run all queries in parallel to collect unique message IDs
+  // Run all queries in parallel to collect unique message IDs
   const uniqueMessageIds = new Set<string>();
   const queryResults = await Promise.allSettled(
     queries.map(async (query) => {
       const res = await gmail.users.messages.list({
         userId: 'me',
         q: `${query} newer_than:1y`,
-        maxResults: 50,
+        maxResults: 30,
       });
       return res.data.messages || [];
     }),
@@ -135,43 +118,72 @@ export async function scanInboxForInvoices(): Promise<{
     } else {
       const errMsg = result.reason?.message || String(result.reason);
       if (errMsg.includes('401') || errMsg.includes('invalid_grant') || errMsg.includes('Token')) {
-        return { found: 0, imported: 0, errors: ['Gmail authenticatie verlopen. Koppel Gmail opnieuw via Instellingen.'] };
+        return { messageIds: [], errors: ['Gmail authenticatie verlopen. Koppel Gmail opnieuw via Instellingen.'] };
       }
       errors.push(`Query failed: ${errMsg}`);
     }
   }
 
-  const found = uniqueMessageIds.size;
-  if (found === 0) {
-    await setSetting('gmail_last_scan', new Date().toISOString());
-    return { found: 0, imported: 0, errors };
+  // Store message IDs for batch processing
+  const messageIds = Array.from(uniqueMessageIds);
+  if (messageIds.length > 0) {
+    await setSetting('gmail_scan_queue', JSON.stringify(messageIds));
   }
 
-  // Phase 2: Fetch messages and save attachments in parallel batches (no Claude extraction yet)
-  const messageIds = Array.from(uniqueMessageIds);
+  return { messageIds, errors };
+}
+
+// Step 2: Process a small batch of messages (called repeatedly from frontend)
+export async function processGmailBatch(batchSize: number = 3): Promise<{
+  processed: number;
+  imported: number;
+  remaining: number;
+  errors: string[];
+}> {
+  const client = await getAuthenticatedClient();
+  if (!client) return { processed: 0, imported: 0, remaining: 0, errors: ['Gmail niet verbonden'] };
+
+  const queueJson = await getSetting('gmail_scan_queue');
+  if (!queueJson) return { processed: 0, imported: 0, remaining: 0, errors: [] };
+
+  let queue: string[];
+  try { queue = JSON.parse(queueJson); } catch { return { processed: 0, imported: 0, remaining: 0, errors: [] }; }
+
+  if (queue.length === 0) return { processed: 0, imported: 0, remaining: 0, errors: [] };
+
+  const gmail = google.gmail({ version: 'v1', auth: client });
+  const errors: string[] = [];
+  const batch = queue.splice(0, batchSize);
   let imported = 0;
 
-  const importResults = await processBatch(messageIds, 5, async (msgId) => {
-    try {
-      const count = await saveGmailAttachments(gmail, msgId);
-      return count;
-    } catch (e) {
-      errors.push(`Message ${msgId}: ${(e as Error).message}`);
-      return 0;
-    }
-  });
+  // Process batch in parallel
+  const results = await Promise.allSettled(
+    batch.map(async (msgId) => {
+      try {
+        return await saveGmailAttachments(gmail, msgId);
+      } catch (e) {
+        errors.push(`${msgId}: ${(e as Error).message}`);
+        return 0;
+      }
+    }),
+  );
 
-  for (const count of importResults) {
-    imported += count;
+  for (const r of results) {
+    if (r.status === 'fulfilled') imported += r.value;
   }
 
-  await setSetting('gmail_last_scan', new Date().toISOString());
+  // Update queue
+  if (queue.length > 0) {
+    await setSetting('gmail_scan_queue', JSON.stringify(queue));
+  } else {
+    await setSetting('gmail_scan_queue', '');
+    await setSetting('gmail_last_scan', new Date().toISOString());
+  }
 
-  return { found, imported, errors };
+  return { processed: batch.length, imported, remaining: queue.length, errors };
 }
 
 // Save attachments from a Gmail message WITHOUT running Claude extraction
-// Extraction happens separately via extractPendingInvoices()
 async function saveGmailAttachments(
   gmail: ReturnType<typeof google.gmail>,
   messageId: string,
@@ -270,7 +282,7 @@ export async function extractPendingInvoices(): Promise<{
     .from('invoices')
     .select('id, file_path, original_filename, extracted_data')
     .eq('extraction_status', 'pending')
-    .limit(10); // Process 10 at a time to stay within serverless timeout
+    .limit(10);
 
   if (!pending || pending.length === 0) {
     return { extracted: 0, failed: 0, remaining: 0 };
@@ -280,59 +292,69 @@ export async function extractPendingInvoices(): Promise<{
   let failed = 0;
 
   // Process extractions 3 at a time
-  await processBatch(pending, 3, async (invoice) => {
-    try {
-      await supabase.from('invoices').update({ extraction_status: 'processing' }).eq('id', invoice.id);
+  const batches = [];
+  for (let i = 0; i < pending.length; i += 3) {
+    batches.push(pending.slice(i, i + 3));
+  }
 
-      // Download file from Supabase Storage
-      const { data: fileData } = await supabase.storage
-        .from('invoices')
-        .download(invoice.file_path);
+  for (const batch of batches) {
+    const results = await Promise.allSettled(
+      batch.map(async (invoice) => {
+        try {
+          await supabase.from('invoices').update({ extraction_status: 'processing' }).eq('id', invoice.id);
 
-      if (!fileData) {
-        await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', invoice.id);
-        failed++;
-        return;
-      }
+          const { data: fileData } = await supabase.storage
+            .from('invoices')
+            .download(invoice.file_path);
 
-      const fileBuffer = Buffer.from(await fileData.arrayBuffer());
-      const data = await extractInvoiceData(fileBuffer, invoice.original_filename || invoice.file_path);
+          if (!fileData) {
+            await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', invoice.id);
+            failed++;
+            return;
+          }
 
-      // Preserve existing extracted_data fields (like gmail_message_id)
-      let existingData: Record<string, unknown> = {};
-      try { existingData = JSON.parse(invoice.extracted_data || '{}'); } catch { /* skip */ }
-      const mergedData = { ...existingData, ...data };
+          const fileBuffer = Buffer.from(await fileData.arrayBuffer());
+          const data = await extractInvoiceData(fileBuffer, invoice.original_filename || invoice.file_path);
 
-      const dateStr = (data.invoice_date as string) || '';
-      const qInfo = dateStr
-        ? getQuarterFromDate(dateStr)
-        : { quarter: `Q${Math.floor(new Date().getMonth() / 3) + 1}`, year: new Date().getFullYear() };
+          let existingData: Record<string, unknown> = {};
+          try { existingData = JSON.parse(invoice.extracted_data || '{}'); } catch { /* skip */ }
+          const mergedData = { ...existingData, ...data };
 
-      await supabase.from('invoices').update({
-        vendor: data.vendor as string || null,
-        amount: data.amount as number || null,
-        vat_amount: data.vat_amount as number || null,
-        vat_rate: data.vat_rate as number || null,
-        invoice_date: data.invoice_date as string || null,
-        invoice_number: data.invoice_number as string || null,
-        description: data.description as string || null,
-        category: data.category as string || null,
-        currency: data.currency as string || 'EUR',
-        extracted_data: JSON.stringify(mergedData),
-        extraction_status: 'done',
-        quarter: qInfo.quarter,
-        year: qInfo.year,
-        updated_at: new Date().toISOString(),
-      }).eq('id', invoice.id);
+          const dateStr = (data.invoice_date as string) || '';
+          const qInfo = dateStr
+            ? getQuarterFromDate(dateStr)
+            : { quarter: `Q${Math.floor(new Date().getMonth() / 3) + 1}`, year: new Date().getFullYear() };
 
-      extracted++;
-    } catch {
-      await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', invoice.id);
-      failed++;
+          await supabase.from('invoices').update({
+            vendor: data.vendor as string || null,
+            amount: data.amount as number || null,
+            vat_amount: data.vat_amount as number || null,
+            vat_rate: data.vat_rate as number || null,
+            invoice_date: data.invoice_date as string || null,
+            invoice_number: data.invoice_number as string || null,
+            description: data.description as string || null,
+            category: data.category as string || null,
+            currency: data.currency as string || 'EUR',
+            extracted_data: JSON.stringify(mergedData),
+            extraction_status: 'done',
+            quarter: qInfo.quarter,
+            year: qInfo.year,
+            updated_at: new Date().toISOString(),
+          }).eq('id', invoice.id);
+
+          extracted++;
+        } catch {
+          await supabase.from('invoices').update({ extraction_status: 'failed' }).eq('id', invoice.id);
+          failed++;
+        }
+      }),
+    );
+    // Count results
+    for (const r of results) {
+      if (r.status === 'rejected') failed++;
     }
-  });
+  }
 
-  // Check how many remain
   const { count } = await supabase
     .from('invoices')
     .select('id', { count: 'exact', head: true })
