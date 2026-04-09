@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
 
   const { data: invoices } = await supabase
     .from('invoices')
-    .select('id, vendor, description, amount, invoice_date, category')
+    .select('id, vendor, description, amount, invoice_date, category, invoice_number, vat_amount, vat_rate, original_filename')
     .eq('year', year)
     .eq('quarter', quarter)
     .eq('classification', 'unknown')
@@ -16,15 +16,36 @@ export async function GET(request: NextRequest) {
 
   const { data: transactions } = await supabase
     .from('transactions')
-    .select('id, counterparty, description, amount, date, category')
+    .select('id, counterparty, description, amount, date, category, reference, account_number')
     .eq('year', year)
     .eq('quarter', quarter)
     .eq('classification', 'unknown')
     .order('date');
 
   const items = [
-    ...(invoices || []).map(i => ({ ...i, type: 'invoice', name: i.vendor, date: i.invoice_date })),
-    ...(transactions || []).map(t => ({ ...t, type: 'transaction', name: t.counterparty })),
+    ...(invoices || []).map(i => ({
+      ...i,
+      type: 'invoice',
+      name: i.vendor,
+      date: i.invoice_date,
+      invoice_number: i.invoice_number,
+      vat_amount: i.vat_amount,
+      vat_rate: i.vat_rate,
+      original_filename: i.original_filename,
+      reference: null,
+      account_number: null,
+    })),
+    ...(transactions || []).map(t => ({
+      ...t,
+      type: 'transaction',
+      name: t.counterparty,
+      reference: t.reference,
+      account_number: t.account_number,
+      invoice_number: null,
+      vat_amount: null,
+      vat_rate: null,
+      original_filename: null,
+    })),
   ];
 
   return NextResponse.json({ items, total: items.length });

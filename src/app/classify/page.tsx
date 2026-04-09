@@ -3,7 +3,14 @@
 import { useEffect, useState, useCallback, Suspense } from "react";
 import { useQuarter } from "@/lib/use-quarter";
 
-type ClassifyItem = { id: string; type: "invoice" | "transaction"; name: string | null; description: string | null; amount: number | null; date: string | null; category: string | null };
+type ClassifyItem = {
+  id: string; type: "invoice" | "transaction";
+  name: string | null; description: string | null; amount: number | null; date: string | null; category: string | null;
+  // transactions
+  reference: string | null; account_number: string | null;
+  // invoices
+  invoice_number: string | null; vat_amount: number | null; vat_rate: number | null; original_filename: string | null;
+};
 
 function ClassifyContent() {
   const { queryString } = useQuarter();
@@ -89,17 +96,51 @@ function ClassifyContent() {
         <>
           <div className={`bg-white rounded-2xl border border-gray-200 shadow-lg p-8 mb-8 transition-all duration-200 ${swipeDir === "left" ? "-translate-x-32 opacity-0 rotate-[-5deg]" : swipeDir === "right" ? "translate-x-32 opacity-0 rotate-[5deg]" : ""}`}>
             <div className="flex items-start justify-between mb-4">
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${current.type === "invoice" ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"}`}>
-                {current.type === "invoice" ? "Factuur" : "Transactie"}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${current.type === "invoice" ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"}`}>
+                  {current.type === "invoice" ? "Factuur" : "Transactie"}
+                </span>
+                {current.invoice_number && (
+                  <span className="text-xs text-gray-400 font-mono">{current.invoice_number}</span>
+                )}
+              </div>
+              <span className="text-sm text-gray-500 whitespace-nowrap ml-2">{current.date || "Geen datum"}</span>
+            </div>
+
+            <h3 className="text-xl font-bold text-gray-900 mb-1">
+              {current.name || current.original_filename || "Onbekend"}
+            </h3>
+
+            {current.description && (
+              <p className="text-gray-600 text-sm mb-2">{current.description}</p>
+            )}
+
+            {current.type === "transaction" && current.reference && (
+              <p className="text-sm text-gray-500 mb-2">
+                <span className="font-medium text-gray-600">Mededeling:</span> {current.reference}
+              </p>
+            )}
+
+            <div className="mt-4 mb-1">
+              <span className={`text-3xl font-bold ${current.amount != null && current.amount < 0 ? "text-red-600" : "text-gray-900"}`}>
+                {current.amount != null ? `${current.amount < 0 ? "-" : "+"}\u20AC${Math.abs(current.amount).toFixed(2)}` : "\u2014"}
               </span>
-              <span className="text-sm text-gray-500">{current.date || "Geen datum"}</span>
             </div>
-            <h3 className="text-xl font-bold text-gray-900 mb-2">{current.name || "Onbekend"}</h3>
-            {current.description && <p className="text-gray-600 mb-4">{current.description}</p>}
-            <div className="text-3xl font-bold text-gray-900">
-              {current.amount != null ? <span className={current.amount < 0 ? "text-red-600" : "text-gray-900"}>{current.amount < 0 ? "-" : ""}\u20AC{Math.abs(current.amount).toFixed(2)}</span> : "\u2014"}
+
+            {current.type === "invoice" && current.vat_amount != null && (
+              <p className="text-sm text-gray-500">
+                \u20AC{current.vat_amount.toFixed(2)} BTW{current.vat_rate != null ? ` (${current.vat_rate}%)` : ""}
+              </p>
+            )}
+
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+              {current.category && (
+                <p className="text-xs text-gray-400">Categorie: {current.category}</p>
+              )}
+              {current.type === "transaction" && current.account_number && (
+                <p className="text-xs text-gray-400 font-mono">{current.account_number}</p>
+              )}
             </div>
-            {current.category && <p className="text-sm text-gray-500 mt-2">Categorie: {current.category}</p>}
           </div>
 
           <div className="flex justify-center gap-8">
