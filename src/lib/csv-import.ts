@@ -41,10 +41,25 @@ function splitCSVLine(line: string, separator: string = ';'): string[] {
 function parseAmount(str: string): number {
   if (!str) return 0;
   let cleaned = str.replace(/\s/g, '').replace(/"/g, '');
+
+  // Accounting negative: (45.50) → -45.50
+  let sign = 1;
+  if (cleaned.startsWith('(') && cleaned.endsWith(')')) {
+    sign = -1;
+    cleaned = cleaned.slice(1, -1);
+  }
+
+  // Strip trailing currency codes/labels (EUR, USD, CR, DR, etc.)
+  cleaned = cleaned.replace(/[a-zA-Z]+$/g, '');
+
+  // European format: comma as decimal separator
   if (cleaned.includes(',') && (cleaned.indexOf(',') > cleaned.lastIndexOf('.') || !cleaned.includes('.'))) {
     cleaned = cleaned.replace(/\./g, '').replace(',', '.');
   }
-  return parseFloat(cleaned) || 0;
+
+  const n = parseFloat(cleaned);
+  if (isNaN(n)) return 0;
+  return sign * n;
 }
 
 function parseDate(str: string): string {
@@ -120,25 +135,73 @@ async function detectColumnsWithClaude(headerAndSample: string): Promise<ColumnM
   return JSON.parse(jsonStr);
 }
 
-export async function parseCSV(content: string): Promise<ParsedTransaction[]> {
-  const lines = content.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length < 2) return [];
+export type ParseCSVResult = {
+  transactions: ParsedTransaction[];
+  diagnostic: string;
+};
+
+// Pick the most likely header row: the line with the most column separators
+// (handles files with metadata rows at the top).
+function findHeaderLine(lines: string[], sep: string): number {
+  let best = 0;
+  let bestCount = -1;
+  const scanLimit = Math.min(lines.length, 10);
+  for (let i = 0; i < scanLimit; i++) {
+    const count = (lines[i].match(new RegExp(`\\${sep}`, 'g')) || []).length;
+    if (count > bestCount) {
+      bestCount = count;
+      best = i;
+    }
+  }
+  return best;
+}
+
+export async function parseCSV(content: string): Promise<ParseCSVResult> {
+  const allLines = content.split(/\r?\n/).filter((l) => l.trim());
+  if (allLines.length < 2) {
+    return { transactions: [], diagnostic: `Bestand bevat slechts ${allLines.length} regel(s).` };
+  }
+
+  // Detect separator from the first few lines
+  const sepGuess = allLines.slice(0, 5).some((l) => l.includes(';')) ? ';' : ',';
+
+  // Skip metadata rows — header is the line with the most separators
+  const headerLineIdx = findHeaderLine(allLines, sepGuess);
+  const lines = allLines.slice(headerLineIdx);
+
+  if (lines.length < 2) {
+    return { transactions: [], diagnostic: 'Geen datarijen onder de herkende header.' };
+  }
 
   // Send header + up to 3 sample rows to Claude for column detection
   const sample = lines.slice(0, Math.min(4, lines.length)).join('\n');
-  const mapping = await detectColumnsWithClaude(sample);
+  let mapping: ColumnMapping;
+  try {
+    mapping = await detectColumnsWithClaude(sample);
+  } catch (e) {
+    throw new Error(`Claude kon het CSV-formaat niet herkennen: ${(e as Error).message}`);
+  }
 
-  const sep = mapping.separator || (lines[0].includes(';') ? ';' : ',');
+  const sep = mapping.separator || sepGuess;
   const header = splitCSVLine(lines[0], sep);
-  const headerLower = header.map(h => h.toLowerCase().trim());
+  const headerLower = header.map((h) => h.toLowerCase().trim());
 
-  // Find column indices from the mapping
+  // Bidirectional fuzzy match: exact, then header-contains-target, then target-contains-header
   function findCol(name: string | null): number {
     if (!name) return -1;
-    const idx = headerLower.indexOf(name.toLowerCase().trim());
-    if (idx >= 0) return idx;
-    // Fuzzy match: check if any header contains the name
-    return headerLower.findIndex(h => h.includes(name.toLowerCase().trim()));
+    const target = name.toLowerCase().trim();
+    if (!target) return -1;
+
+    // Exact match first
+    const exact = headerLower.indexOf(target);
+    if (exact >= 0) return exact;
+
+    // Header contains target (Claude returned shorter name than header)
+    const contains = headerLower.findIndex((h) => h.includes(target));
+    if (contains >= 0) return contains;
+
+    // Target contains header (Claude returned longer name than header)
+    return headerLower.findIndex((h) => h.length > 2 && target.includes(h));
   }
 
   const dateIdx = findCol(mapping.date);
@@ -148,22 +211,80 @@ export async function parseCSV(content: string): Promise<ParsedTransaction[]> {
   const refIdx = findCol(mapping.reference);
   const accountIdx = findCol(mapping.account_number);
 
-  if (dateIdx < 0 || amountIdx < 0) {
-    throw new Error('Kon geen datum- of bedragkolom identificeren in dit CSV-bestand');
+  // Fallback: scan headers for common patterns if Claude missed fields
+  function findByPatterns(patterns: RegExp[]): number {
+    for (let i = 0; i < headerLower.length; i++) {
+      if (patterns.some((p) => p.test(headerLower[i]))) return i;
+    }
+    return -1;
   }
 
-  return lines.slice(1).map(line => {
-    const cols = splitCSVLine(line, sep);
-    if (cols.length < 3) return null;
+  const effectiveDateIdx = dateIdx >= 0 ? dateIdx : findByPatterns([/datum/, /date/, /boekingsdatum/]);
+  let effectiveAmountIdx = amountIdx >= 0 ? amountIdx : findByPatterns([/bedrag/, /amount/, /montant/]);
+
+  // Handle separate debit/credit columns (common on credit-card CSVs)
+  let debitIdx = -1;
+  let creditIdx = -1;
+  if (effectiveAmountIdx < 0) {
+    debitIdx = findByPatterns([/debet$/, /debit$/, /uit$/, /afgeboekt/]);
+    creditIdx = findByPatterns([/credit$/, /in$/, /bijgeboekt/]);
+  }
+
+  if (effectiveDateIdx < 0) {
     return {
-      date: parseDate(cols[dateIdx] || ''),
+      transactions: [],
+      diagnostic: `Geen datum-kolom gevonden. Headers: [${header.join(', ')}]. Claude zag: date=${mapping.date || 'null'}.`,
+    };
+  }
+  if (effectiveAmountIdx < 0 && (debitIdx < 0 || creditIdx < 0)) {
+    return {
+      transactions: [],
+      diagnostic: `Geen bedrag-kolom gevonden. Headers: [${header.join(', ')}]. Claude zag: amount=${mapping.amount || 'null'}.`,
+    };
+  }
+
+  const dataLines = lines.slice(1);
+  const rawParsed = dataLines.map((line) => {
+    const cols = splitCSVLine(line, sep);
+    if (cols.length < 2) return null;
+
+    let amount = 0;
+    if (effectiveAmountIdx >= 0) {
+      amount = parseAmount(cols[effectiveAmountIdx] || '');
+    } else if (debitIdx >= 0 || creditIdx >= 0) {
+      const debit = debitIdx >= 0 ? parseAmount(cols[debitIdx] || '') : 0;
+      const credit = creditIdx >= 0 ? parseAmount(cols[creditIdx] || '') : 0;
+      // Debit reduces balance (negative), credit increases (positive)
+      amount = credit - Math.abs(debit);
+    }
+
+    return {
+      date: parseDate(cols[effectiveDateIdx] || ''),
       description: descIdx >= 0 ? (cols[descIdx] || '').trim() : '',
-      amount: parseAmount(cols[amountIdx] || ''),
+      amount,
       counterparty: counterpartyIdx >= 0 ? (cols[counterpartyIdx] || '').trim() : '',
       reference: refIdx >= 0 ? (cols[refIdx] || '').trim() : '',
       accountNumber: accountIdx >= 0 ? (cols[accountIdx] || '').trim() : '',
     };
-  }).filter((t): t is ParsedTransaction => t !== null && !!t.date && t.amount !== 0);
+  });
+
+  const transactions = rawParsed.filter(
+    (t): t is ParsedTransaction => t !== null && !!t.date && t.amount !== 0,
+  );
+
+  let diagnostic = '';
+  if (transactions.length === 0) {
+    const droppedByDate = rawParsed.filter((t) => t && !t.date).length;
+    const droppedByAmount = rawParsed.filter((t) => t && !!t.date && t.amount === 0).length;
+    const firstDataRow = dataLines[0] || '(geen)';
+    diagnostic =
+      `${dataLines.length} datarijen gelezen, 0 bruikbaar. ` +
+      `Kolommen: date=${header[effectiveDateIdx] || '?'}, amount=${effectiveAmountIdx >= 0 ? header[effectiveAmountIdx] : debitIdx >= 0 || creditIdx >= 0 ? 'debet/credit' : '?'}. ` +
+      `${droppedByDate} zonder datum, ${droppedByAmount} met bedrag=0. ` +
+      `Eerste datarij: "${firstDataRow.slice(0, 120)}"`;
+  }
+
+  return { transactions, diagnostic };
 }
 
 export async function importTransactions(parsed: ParsedTransaction[]): Promise<{ imported: number; skipped: number }> {
