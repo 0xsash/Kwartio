@@ -129,7 +129,7 @@ function ClassifyContent() {
 
             {current.type === "invoice" && current.vat_amount != null && (
               <p className="text-sm text-gray-500">
-                \u20AC{current.vat_amount.toFixed(2)} BTW{current.vat_rate != null ? ` (${current.vat_rate}%)` : ""}
+                €{current.vat_amount.toFixed(2)} BTW{current.vat_rate != null ? ` (${current.vat_rate}%)` : ""}
               </p>
             )}
 
@@ -149,14 +149,14 @@ function ClassifyContent() {
                 <svg className="w-8 h-8 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </div>
               <span className="text-sm font-medium text-purple-600">Persoonlijk</span>
-              <kbd className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">\u2190 / A</kbd>
+              <kbd className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">← / A</kbd>
             </button>
             <button onClick={() => classify("professional")} className="flex flex-col items-center gap-2 group">
               <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center group-hover:bg-blue-200 transition-colors">
                 <svg className="w-8 h-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
               </div>
               <span className="text-sm font-medium text-blue-600">Professioneel</span>
-              <kbd className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">\u2192 / D</kbd>
+              <kbd className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">→ / D</kbd>
             </button>
           </div>
 

@@ -166,7 +166,7 @@ function TransactionsContent() {
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-3">
           <h2 className="text-lg font-semibold text-gray-900">Bankafschrift importeren</h2>
-          <InfoBubble text="Download je bankafschrift als CSV of PDF vanuit je online banking (KBC, Belfius, ING, BNP Paribas, ...) en upload het hier. Kwartio herkent automatisch het formaat. Upload gerust meerdere bestanden tegelijk \u2014 ook van verschillende rekeningen of kaarten." />
+          <InfoBubble text="Download je bankafschrift als CSV of PDF vanuit je online banking (KBC, Belfius, ING, BNP Paribas, ...) en upload het hier. Kwartio herkent automatisch het formaat. Upload gerust meerdere bestanden tegelijk — ook van verschillende rekeningen of kaarten." />
         </div>
 
         {/* Drag-and-drop zone */}
@@ -194,7 +194,7 @@ function TransactionsContent() {
                 </svg>
               </div>
               <p className="text-lg text-gray-800 font-semibold">Sleep je bankafschrift hierheen</p>
-              <p className="text-sm text-gray-500 mt-1">CSV, TXT of PDF \u2014 werkt met KBC, Belfius, ING, BNP Paribas en meer</p>
+              <p className="text-sm text-gray-500 mt-1">CSV, TXT of PDF — werkt met KBC, Belfius, ING, BNP Paribas en meer</p>
               <div className="flex flex-wrap justify-center gap-2 mt-5">
                 <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white rounded-lg cursor-pointer hover:bg-green-700 transition-colors font-medium shadow-sm">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
@@ -329,7 +329,7 @@ function TransactionsContent() {
                     <td className="px-4 py-3 text-sm font-medium max-w-48 truncate">{tx.counterparty || "\u2014"}</td>
                     <td className="px-4 py-3 text-sm text-gray-600 max-w-64 truncate">{tx.description || "\u2014"}</td>
                     <td className={`px-4 py-3 text-sm text-right font-mono whitespace-nowrap ${tx.amount < 0 ? "text-red-600" : "text-green-600"}`}>
-                      {tx.amount < 0 ? "" : "+"}\u20AC{Math.abs(tx.amount).toFixed(2)}
+                      {tx.amount < 0 ? "" : "+"}€{Math.abs(tx.amount).toFixed(2)}
                     </td>
                     <td className="px-4 py-3 text-sm">
                       {tx.matched_vendor ? (

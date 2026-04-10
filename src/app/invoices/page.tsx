@@ -125,7 +125,7 @@ function InvoicesContent() {
               <svg className="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
             </div>
             <p className="text-lg text-gray-800 font-semibold">Sleep facturen hierheen</p>
-            <p className="text-sm text-gray-500 mt-1">PDF, JPG, PNG of WEBP \u2014 meerdere tegelijk mogelijk</p>
+            <p className="text-sm text-gray-500 mt-1">PDF, JPG, PNG of WEBP — meerdere tegelijk mogelijk</p>
             <div className="flex justify-center gap-2 mt-5">
               <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700 transition-colors font-medium shadow-sm">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
@@ -206,7 +206,7 @@ function InvoiceRow({ inv, isExpanded, editData, onToggle, onUpdate, onDelete, o
         <td className="px-4 py-3 text-sm">{inv.vat_amount != null ? `\u20AC${inv.vat_amount.toFixed(2)} (${inv.vat_rate}%)` : "\u2014"}</td>
         <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
           <select value={inv.category || ""} onChange={(e) => onUpdate(inv.id, { category: e.target.value })} className="text-sm border border-gray-200 rounded px-2 py-1">
-            <option value="">\u2014</option>
+            <option value="">—</option>
             {Object.entries(CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </td>
