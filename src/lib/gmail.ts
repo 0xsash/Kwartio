@@ -477,12 +477,40 @@ export async function extractPendingInvoices(): Promise<{
             ? getQuarterFromDate(dateStr)
             : { quarter: `Q${Math.floor(new Date().getMonth() / 3) + 1}`, year: new Date().getFullYear() };
 
+          const vendor = (data.vendor as string) || null;
+          const amount = (data.amount as number) || null;
+          const invoiceDate = (data.invoice_date as string) || null;
+
+          // Content dedup — different PDF bytes may hold the same invoice
+          // (e.g. re-sent from vendor, uploaded manually + found by Gmail).
+          // If a record with same (vendor, amount, invoice_date) already
+          // exists, delete this newly-extracted copy instead of updating.
+          if (vendor && amount && invoiceDate) {
+            const { data: existingByContent } = await supabase
+              .from('invoices')
+              .select('id')
+              .eq('vendor', vendor)
+              .eq('amount', amount)
+              .eq('invoice_date', invoiceDate)
+              .neq('id', invoice.id)
+              .limit(1);
+
+            if (existingByContent && existingByContent.length > 0) {
+              if (invoice.file_path) {
+                await supabase.storage.from('invoices').remove([invoice.file_path]);
+              }
+              await supabase.from('invoices').delete().eq('id', invoice.id);
+              extracted++;
+              return;
+            }
+          }
+
           await supabase.from('invoices').update({
-            vendor: data.vendor as string || null,
-            amount: data.amount as number || null,
+            vendor,
+            amount,
             vat_amount: data.vat_amount as number || null,
             vat_rate: data.vat_rate as number || null,
-            invoice_date: data.invoice_date as string || null,
+            invoice_date: invoiceDate,
             invoice_number: data.invoice_number as string || null,
             description: data.description as string || null,
             category: data.category as string || null,

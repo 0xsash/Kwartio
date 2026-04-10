@@ -173,14 +173,22 @@ export async function importTransactions(parsed: ParsedTransaction[]): Promise<{
   for (const tx of parsed) {
     if (!tx.date) continue;
 
-    // Duplicate check
-    const { data: existing } = await supabase
+    // Duplicate check — MUST include account_number, otherwise the same
+    // transaction on two different cards gets silently dropped.
+    let dupQuery = supabase
       .from('transactions')
       .select('id')
       .eq('date', tx.date)
       .eq('amount', tx.amount)
-      .eq('counterparty', tx.counterparty)
-      .limit(1);
+      .eq('counterparty', tx.counterparty);
+
+    if (tx.accountNumber) {
+      dupQuery = dupQuery.eq('account_number', tx.accountNumber);
+    } else {
+      dupQuery = dupQuery.is('account_number', null);
+    }
+
+    const { data: existing } = await dupQuery.limit(1);
 
     if (existing && existing.length > 0) {
       skipped++;

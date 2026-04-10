@@ -51,14 +51,36 @@ export async function POST(request: NextRequest) {
         file_hash: fileHash,
       }).eq('id', replaceId);
     } else {
-      // Insert new record
-      await supabase.from('invoices').insert({
+      // Insert new record. If a concurrent upload raced us to the DB-level
+      // UNIQUE(file_hash) index, catch the violation and treat as duplicate.
+      const { error: insertError } = await supabase.from('invoices').insert({
         id,
         file_path: storedName,
         original_filename: file.name,
         extraction_status: 'pending',
         file_hash: fileHash,
       });
+
+      if (insertError) {
+        // Postgres 23505 = unique_violation
+        if (insertError.code === '23505') {
+          // Another request beat us to it — clean up the storage file and
+          // point the user at the existing record.
+          await supabase.storage.from('invoices').remove([storedName]);
+          const { data: winner } = await supabase
+            .from('invoices')
+            .select('id, vendor')
+            .eq('file_hash', fileHash)
+            .limit(1);
+          const winnerId = winner?.[0]?.id || id;
+          const winnerVendor = winner?.[0]?.vendor || file.name;
+          results.push({ id: winnerId, filename: file.name, status: `overgeslagen — duplicaat van ${winnerVendor}` });
+          continue;
+        }
+        // Any other error: surface it as a failure
+        results.push({ id, filename: file.name, status: 'failed: ' + insertError.message });
+        continue;
+      }
     }
 
     // Try to extract immediately
@@ -92,7 +114,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      await supabase.from('invoices').update({
+      const { error: updateError } = await supabase.from('invoices').update({
         vendor,
         amount,
         vat_amount: data.vat_amount as number || null,
@@ -108,6 +130,15 @@ export async function POST(request: NextRequest) {
         year: qInfo.year,
         updated_at: new Date().toISOString(),
       }).eq('id', id);
+
+      if (updateError && updateError.code === '23505') {
+        // Content unique violation — another invoice with same vendor/amount/date exists.
+        // Clean up the newly-inserted file and record.
+        await supabase.from('invoices').delete().eq('id', id);
+        await supabase.storage.from('invoices').remove([storedName]);
+        results.push({ id, filename: file.name, status: `overgeslagen — duplicaat (${vendor}, €${amount})` });
+        continue;
+      }
 
       results.push({ id, filename: file.name, status: 'extracted' });
     } catch (error) {

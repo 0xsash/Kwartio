@@ -133,6 +133,24 @@ function SettingsContent() {
         setScanResult(`${totalExtracted} van ${totalImported} facturen verwerkt${totalFailed ? ` (${totalFailed} mislukt)` : ""}${extractRemaining > 0 ? "" : " — klaar!"}`);
       }
 
+      // Auto-run matching so newly-extracted invoices get linked to transactions
+      try {
+        const matchRes = await fetch("/api/matching", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (matchRes.ok) {
+          const matchData = await matchRes.json();
+          const matched = (matchData.matched as number) || 0;
+          if (matched > 0) {
+            setScanResult(
+              `${totalExtracted} facturen verwerkt — ${matched} automatisch gekoppeld aan transacties`,
+            );
+          }
+        }
+      } catch { /* non-fatal */ }
+
       setScanPhase("done");
     } catch (e) {
       setScanResult(`Fout: ${(e as Error).message}`);

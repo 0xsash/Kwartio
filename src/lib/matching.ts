@@ -1,5 +1,16 @@
 import { supabase, type Invoice, type Transaction } from './db';
 
+// Strip common corporate suffixes and noise to compare vendor↔counterparty
+// fuzzily. Handles cases like "Google LLC" vs "GOOGLE *YouTubePremium".
+function normalizeVendor(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\b(llc|inc|ltd|bv|bvba|srl|sa|nv|gmbh|ag|corp|company|limited|com|plc|sprl)\b/g, '')
+    .replace(/[*._\-/,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export async function autoMatchTransactions(year: number, quarter: string) {
   const { data: invoices } = await supabase
     .from('invoices')
@@ -35,7 +46,8 @@ export async function autoMatchTransactions(year: number, quarter: string) {
         score += 50;
       } else if (amountDiff < 1) {
         score += 30;
-      } else if (amountDiff / invAmount < 0.05) {
+      } else if (amountDiff / invAmount < 0.10) {
+        // Widened from 5% to 10% to handle FX variation (USD invoices, etc.)
         score += 15;
       } else {
         continue;
@@ -50,28 +62,34 @@ export async function autoMatchTransactions(year: number, quarter: string) {
         else if (daysDiff <= 7) score += 15;
         else if (daysDiff <= 14) score += 10;
         else if (daysDiff <= 30) score += 5;
+        else if (daysDiff <= 45) score += 3;
       }
 
       if (inv.vendor && tx.counterparty) {
-        const vendorLower = inv.vendor.toLowerCase();
-        const counterpartyLower = tx.counterparty.toLowerCase();
+        // Compare normalized forms to handle "Google LLC" vs "GOOGLE *YouTubePremium"
+        const vendorNorm = normalizeVendor(inv.vendor);
+        const counterpartyNorm = normalizeVendor(tx.counterparty);
 
-        if (counterpartyLower.includes(vendorLower) || vendorLower.includes(counterpartyLower)) {
-          score += 25;
-        } else {
-          const vendorWords = vendorLower.split(/\s+/);
-          const counterpartyWords = counterpartyLower.split(/\s+/);
-          const commonWords = vendorWords.filter(w => w.length > 2 && counterpartyWords.some(cw => cw.includes(w)));
-          if (commonWords.length > 0) {
-            score += 10;
+        if (vendorNorm && counterpartyNorm) {
+          if (counterpartyNorm.includes(vendorNorm) || vendorNorm.includes(counterpartyNorm)) {
+            score += 25;
+          } else {
+            const vendorWords = vendorNorm.split(/\s+/);
+            const counterpartyWords = counterpartyNorm.split(/\s+/);
+            const commonWords = vendorWords.filter(
+              (w) => w.length > 2 && counterpartyWords.some((cw) => cw.includes(w)),
+            );
+            if (commonWords.length > 0) {
+              score += 10;
+            }
           }
         }
       }
 
       if (inv.vendor && tx.description) {
-        const descLower = tx.description.toLowerCase();
-        const vendorLower = inv.vendor.toLowerCase();
-        if (descLower.includes(vendorLower) || vendorLower.includes(descLower)) {
+        const descNorm = normalizeVendor(tx.description);
+        const vendorNorm = normalizeVendor(inv.vendor);
+        if (vendorNorm && descNorm && (descNorm.includes(vendorNorm) || vendorNorm.includes(descNorm))) {
           score += 10;
         }
       }

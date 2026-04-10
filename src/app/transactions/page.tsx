@@ -85,6 +85,25 @@ function TransactionsContent() {
       } catch (e) { results.push(`${file.name}: Fout - ${(e as Error).message}`); }
     }
 
+    // Auto-run matching so existing invoices immediately get linked to
+    // newly-imported transactions
+    if (anySuccess) {
+      try {
+        const matchRes = await fetch("/api/matching", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (matchRes.ok) {
+          const matchData = await matchRes.json();
+          const matched = (matchData.matched as number) || 0;
+          if (matched > 0) {
+            results.push(`${matched} transacties automatisch gekoppeld aan bestaande facturen`);
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+
     setImportResult(results.join('\n'));
     if (anySuccess) { loadTransactions(); loadMissingInvoices(); }
     setImporting(false);
