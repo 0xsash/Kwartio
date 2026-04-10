@@ -43,6 +43,7 @@ function TransactionsContent() {
   const [uploadingTxId, setUploadingTxId] = useState<string | null>(null);
   const [dialogTab, setDialogTab] = useState<"existing" | "upload">("existing");
   const [dialogDragOver, setDialogDragOver] = useState(false);
+  const [importDragOver, setImportDragOver] = useState(false);
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const loadTransactions = useCallback(() => {
@@ -162,28 +163,55 @@ function TransactionsContent() {
       )}
 
       {/* Import section */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-        <div className="flex items-center gap-2 mb-4">
+      <div className="mb-6">
+        <div className="flex items-center gap-2 mb-3">
           <h2 className="text-lg font-semibold text-gray-900">Bankafschrift importeren</h2>
-          <InfoBubble text="Download je bankafschrift als CSV of PDF vanuit je online banking (KBC, Belfius, ING, BNP Paribas, ...) en upload het hier. Kwartio herkent automatisch het formaat. Upload gerust meerdere bestanden tegelijk — ook van verschillende rekeningen of kaarten." />
+          <InfoBubble text="Download je bankafschrift als CSV of PDF vanuit je online banking (KBC, Belfius, ING, BNP Paribas, ...) en upload het hier. Kwartio herkent automatisch het formaat. Upload gerust meerdere bestanden tegelijk \u2014 ook van verschillende rekeningen of kaarten." />
         </div>
-        <div className="flex flex-wrap items-end gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Bestand kiezen</label>
-            <label className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg cursor-pointer hover:bg-green-700 transition-colors text-sm font-medium">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-              <input type="file" accept=".csv,.txt,.pdf" multiple className="hidden" onChange={(e) => e.target.files?.length && handleImport(e.target.files)} disabled={importing} />
-              {importing ? "Analyseren..." : "CSV of PDF uploaden"}
-            </label>
-            <p className="text-xs text-gray-400 mt-1">CSV, TXT of PDF — meerdere bestanden tegelijk mogelijk</p>
-          </div>
-          <div>
-            <button onClick={runMatching} disabled={matching || transactions.length === 0} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-medium inline-flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
-              {matching ? "Matchen..." : "Auto-match met facturen"}
-            </button>
-            <InfoBubble text="Koppelt transacties automatisch aan facturen op basis van bedrag, datum en naam. Hoe meer facturen je hebt ge\u00FCpload, hoe beter de matching werkt." />
-          </div>
+
+        {/* Drag-and-drop zone */}
+        <div
+          onDragOver={(e) => { e.preventDefault(); setImportDragOver(true); }}
+          onDragLeave={() => setImportDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setImportDragOver(false);
+            if (e.dataTransfer.files?.length) handleImport(e.dataTransfer.files);
+          }}
+          className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all ${importDragOver ? "border-green-500 bg-green-50 scale-[1.01]" : "border-gray-300 bg-gradient-to-br from-white to-gray-50 hover:border-green-300 hover:bg-green-50/30"}`}
+        >
+          {importing ? (
+            <div className="text-green-600">
+              <svg className="animate-spin h-10 w-10 mx-auto mb-3" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+              <p className="font-semibold">Bankafschrift analyseren...</p>
+              <p className="text-sm mt-1 text-green-500">Kwartio herkent automatisch het formaat</p>
+            </div>
+          ) : (
+            <>
+              <div className="mx-auto w-16 h-16 rounded-2xl bg-green-100 flex items-center justify-center mb-3">
+                <svg className="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                </svg>
+              </div>
+              <p className="text-lg text-gray-800 font-semibold">Sleep je bankafschrift hierheen</p>
+              <p className="text-sm text-gray-500 mt-1">CSV, TXT of PDF \u2014 werkt met KBC, Belfius, ING, BNP Paribas en meer</p>
+              <div className="flex flex-wrap justify-center gap-2 mt-5">
+                <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white rounded-lg cursor-pointer hover:bg-green-700 transition-colors font-medium shadow-sm">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                  <input type="file" accept=".csv,.txt,.pdf" multiple className="hidden" onChange={(e) => e.target.files?.length && handleImport(e.target.files)} />
+                  Bestanden kiezen
+                </label>
+                <button
+                  onClick={runMatching}
+                  disabled={matching || transactions.length === 0}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                  {matching ? "Matchen..." : "Auto-match met facturen"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
         {importResult && <div className="mt-3 text-sm space-y-1">{importResult.split('\n').map((line, i) => (
           <p key={i} className={line.includes("Fout") ? "text-red-600" : "text-green-600"}>{line}</p>
@@ -266,10 +294,14 @@ function TransactionsContent() {
 
       {/* Transaction list */}
       {loading ? <p className="text-gray-500">Laden...</p> : displayedTransactions.length === 0 ? (
-        <div className="text-center py-12">
-          <svg className="mx-auto h-12 w-12 text-gray-300 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
-          <p className="text-lg text-gray-500">{showMissingOnly ? "Geen ontbrekende facturen" : "Nog geen transacties"}</p>
-          <p className="text-sm text-gray-400 mt-1">{showMissingOnly ? "Alle uitgaven hebben een factuur" : "Upload een CSV- of PDF-bankafschrift hierboven om te starten"}</p>
+        <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-200">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
+            <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+            </svg>
+          </div>
+          <p className="text-lg font-semibold text-gray-800">{showMissingOnly ? "Alles in orde!" : "Nog geen transacties dit kwartaal"}</p>
+          <p className="text-sm text-gray-500 mt-1 max-w-sm mx-auto">{showMissingOnly ? "Elke uitgave heeft een gekoppelde factuur. Klaar voor je boekhouder." : "Upload je bankafschrift (CSV of PDF) hierboven. Kwartio herkent automatisch het formaat van elke Belgische bank."}</p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

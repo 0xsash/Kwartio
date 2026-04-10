@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
+import { FloatingClassify } from "@/components/floating-classify";
 
 export const metadata: Metadata = {
   title: "Kwartio - Jouw boekhouding, automatisch",
@@ -17,6 +18,7 @@ export default function RootLayout({
       <body className="min-h-full flex font-sans">
         <Sidebar />
         <main className="flex-1 md:ml-64 p-4 pt-16 md:p-8 md:pt-8">{children}</main>
+        <FloatingClassify />
       </body>
     </html>
   );

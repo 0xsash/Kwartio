@@ -33,6 +33,14 @@ function DashboardContent() {
   const [gmailConnected, setGmailConnected] = useState(false);
   const [missingCount, setMissingCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
+  const [scanPhase, setScanPhase] = useState<"idle" | "searching" | "extracting" | "done">("idle");
+  const [scanProgress, setScanProgress] = useState<{ extracted: number; total: number } | null>(null);
+
+  const refreshStats = () => {
+    fetch(`/api/stats?${queryString}`).then((r) => r.json()).then(setStats);
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -46,6 +54,84 @@ function DashboardContent() {
       setMissingCount(m.count || 0);
     }).finally(() => setLoading(false));
   }, [queryString]);
+
+  const scanInbox = async () => {
+    setScanning(true);
+    setScanResult(null);
+    setScanPhase("searching");
+    setScanProgress(null);
+    try {
+      setScanResult("Inbox doorzoeken...");
+      const res = await fetch("/api/gmail/scan", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setScanResult(`Fout: ${data.error || "Onbekende fout"}`);
+        setScanPhase("idle");
+        return;
+      }
+      if (data.errors?.length && data.found === 0) {
+        setScanResult(data.errors[0]);
+        setScanPhase("done");
+        return;
+      }
+      if (data.found === 0) {
+        setScanResult("Geen nieuwe e-mails met bijlagen gevonden.");
+        setScanPhase("done");
+        return;
+      }
+
+      setScanPhase("extracting");
+      const totalMessages = data.found as number;
+      let totalProcessed = 0;
+      let totalImported = 0;
+      let remaining = totalMessages;
+
+      setScanProgress({ extracted: 0, total: totalMessages });
+      setScanResult(`${totalMessages} e-mails gevonden. Bijlagen ophalen...`);
+
+      while (remaining > 0) {
+        const batchRes = await fetch("/api/gmail/process-batch", { method: "POST" });
+        if (!batchRes.ok) break;
+        const batchData = await batchRes.json();
+        totalProcessed += (batchData.processed as number) || 0;
+        totalImported += (batchData.imported as number) || 0;
+        remaining = (batchData.remaining as number) ?? 0;
+        setScanProgress({ extracted: totalProcessed, total: totalMessages });
+        setScanResult(`${totalProcessed} van ${totalMessages} e-mails verwerkt \u2014 ${totalImported} bijlagen opgeslagen`);
+      }
+
+      if (totalImported === 0) {
+        setScanResult(`${totalMessages} e-mails doorzocht \u2014 geen nieuwe facturen gevonden`);
+        setScanPhase("done");
+        refreshStats();
+        return;
+      }
+
+      setScanResult(`${totalImported} nieuwe bijlagen opgeslagen. Gegevens extraheren...`);
+      let totalExtracted = 0;
+      let totalFailed = 0;
+      let extractRemaining = 1;
+      setScanProgress({ extracted: 0, total: totalImported });
+      while (extractRemaining > 0) {
+        const exRes = await fetch("/api/invoices/extract", { method: "POST" });
+        if (!exRes.ok) break;
+        const exData = await exRes.json();
+        totalExtracted += (exData.extracted as number) || 0;
+        totalFailed += (exData.failed as number) || 0;
+        extractRemaining = (exData.remaining as number) ?? 0;
+        setScanProgress({ extracted: totalExtracted, total: totalImported });
+        setScanResult(`${totalExtracted} van ${totalImported} facturen verwerkt${totalFailed ? ` (${totalFailed} mislukt)` : ""}${extractRemaining > 0 ? "" : " \u2014 klaar!"}`);
+      }
+
+      setScanPhase("done");
+      refreshStats();
+    } catch (e) {
+      setScanResult(`Fout: ${(e as Error).message}`);
+      setScanPhase("idle");
+    } finally {
+      setScanning(false);
+    }
+  };
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-500">Laden...</div>;
   if (!stats) return <div className="text-red-500">Fout bij laden van statistieken</div>;
@@ -97,6 +183,71 @@ function DashboardContent() {
             </div>
           </div>
         </Link>
+      )}
+
+      {/* Big Inbox scannen hero — the "magic button" */}
+      {gmailConnected && (
+        <div className="mb-6 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl p-6 text-white shadow-lg">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex items-start gap-4 flex-1 min-w-0">
+              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0 backdrop-blur-sm">
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className="text-lg font-bold mb-1">Automatisch facturen vinden</h2>
+                <p className="text-sm text-blue-100">Kwartio doorzoekt je Gmail-inbox op facturen, receipts en abonnementen van SaaS-diensten, Belgische leveranciers en meer.</p>
+              </div>
+            </div>
+            <button
+              onClick={scanInbox}
+              disabled={scanning}
+              className="px-6 py-3 bg-white text-blue-700 rounded-lg font-semibold hover:bg-blue-50 transition-colors disabled:opacity-60 disabled:cursor-wait inline-flex items-center gap-2 shadow-sm flex-shrink-0"
+            >
+              {scanning ? (
+                <>
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+                  Scannen...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                  Inbox scannen
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Progress */}
+          {scanning && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between text-xs text-blue-100 mb-1">
+                <span>{scanPhase === "searching" ? "Inbox doorzoeken..." : scanProgress ? `${scanProgress.extracted} / ${scanProgress.total} verwerkt` : "Bezig..."}</span>
+                {scanPhase === "extracting" && scanProgress && scanProgress.total > 0 && (
+                  <span>{Math.round((scanProgress.extracted / scanProgress.total) * 100)}%</span>
+                )}
+              </div>
+              <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
+                {scanPhase === "searching" ? (
+                  <div className="h-full bg-white rounded-full animate-pulse w-full" />
+                ) : scanProgress && scanProgress.total > 0 ? (
+                  <div
+                    className="h-full bg-white rounded-full transition-all duration-500"
+                    style={{ width: `${Math.round((scanProgress.extracted / scanProgress.total) * 100)}%` }}
+                  />
+                ) : (
+                  <div className="h-full bg-white rounded-full animate-pulse w-full" />
+                )}
+              </div>
+            </div>
+          )}
+          {scanResult && !scanning && (
+            <p className={`mt-3 text-sm ${scanResult.startsWith("Fout") ? "text-red-100" : "text-blue-50"}`}>
+              {scanResult}
+            </p>
+          )}
+        </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">

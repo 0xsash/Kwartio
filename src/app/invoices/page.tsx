@@ -111,25 +111,28 @@ function InvoicesContent() {
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
-        className={`mb-8 border-2 border-dashed rounded-xl p-8 text-center transition-colors ${dragOver ? "border-blue-500 bg-blue-50" : "border-gray-300 bg-white"}`}
+        className={`mb-8 border-2 border-dashed rounded-2xl p-10 text-center transition-all ${dragOver ? "border-blue-500 bg-blue-50 scale-[1.01]" : "border-gray-300 bg-gradient-to-br from-white to-gray-50 hover:border-blue-300 hover:bg-blue-50/30"}`}
       >
         {uploading ? (
           <div className="text-blue-600">
-            <svg className="animate-spin h-8 w-8 mx-auto mb-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
-            <p className="font-medium">Facturen uploaden en analyseren...</p>
-            <p className="text-sm mt-1">Claude Vision extraheert alle gegevens automatisch</p>
+            <svg className="animate-spin h-10 w-10 mx-auto mb-3" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+            <p className="font-semibold">Facturen uploaden en analyseren...</p>
+            <p className="text-sm mt-1 text-blue-500">Claude Vision extraheert alle gegevens automatisch</p>
           </div>
         ) : (
           <>
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-            <p className="mt-2 text-gray-600 font-medium">Sleep facturen hierheen</p>
-            <p className="text-sm text-gray-500 mt-1">PDF, JPG, PNG — of klik om te bladeren</p>
-            <div className="flex justify-center gap-2 mt-4">
-              <label className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700 transition-colors">
+            <div className="mx-auto w-16 h-16 rounded-2xl bg-blue-100 flex items-center justify-center mb-3">
+              <svg className="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+            </div>
+            <p className="text-lg text-gray-800 font-semibold">Sleep facturen hierheen</p>
+            <p className="text-sm text-gray-500 mt-1">PDF, JPG, PNG of WEBP \u2014 meerdere tegelijk mogelijk</p>
+            <div className="flex justify-center gap-2 mt-5">
+              <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700 transition-colors font-medium shadow-sm">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                 <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={(e) => e.target.files && handleUpload(e.target.files)} />
                 Bestanden kiezen
               </label>
-              <label className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg cursor-pointer hover:bg-gray-200 transition-colors md:hidden">
+              <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-gray-700 rounded-lg cursor-pointer hover:bg-gray-50 border border-gray-200 transition-colors font-medium md:hidden">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                 <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => e.target.files && handleUpload(e.target.files)} />
                 Foto nemen
@@ -141,7 +144,15 @@ function InvoicesContent() {
 
       {/* Invoice list */}
       {loading ? <p className="text-gray-500">Laden...</p> : invoices.length === 0 ? (
-        <div className="text-center py-12 text-gray-500"><p className="text-lg">Nog geen facturen</p><p className="text-sm mt-1">Upload je eerste factuur hierboven</p></div>
+        <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-200">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
+            <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </div>
+          <p className="text-lg font-semibold text-gray-800">Nog geen facturen dit kwartaal</p>
+          <p className="text-sm text-gray-500 mt-1 max-w-sm mx-auto">Sleep je eerste factuur hierboven of laat Kwartio ze automatisch vinden in je Gmail.</p>
+        </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full">
